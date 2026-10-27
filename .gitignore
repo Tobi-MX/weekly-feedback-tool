@@ -1,0 +1,21 @@
+# Local Claude Code settings (may contain API tokens)
+.claude/settings.local.json
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Node
+node_modules/
+dist/
+coverage/
+*.log
+
+# Supabase local state
+supabase/.branches/
+supabase/.temp/
+
+# OS / editor
+.DS_Store
+Thumbs.db
