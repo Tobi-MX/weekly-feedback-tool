@@ -1,9 +1,5 @@
 import { PlaceholderPage } from './PlaceholderPage'
 
-export function ProjectPage() {
-  return <PlaceholderPage title="Project" />
-}
-
 export function FeedbackPage() {
   return <PlaceholderPage title="Feedback" />
 }

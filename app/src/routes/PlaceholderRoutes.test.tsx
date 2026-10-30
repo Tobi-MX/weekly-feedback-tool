@@ -21,8 +21,6 @@ function renderSignedIn(path: string, navigationLog?: string[]) {
 
 describe('placeholder routes', () => {
   it.each<[string, string]>([
-    ['/projects', 'Projects'],
-    ['/projects/project-secret-id', 'Project'],
     ['/cycles/cycle-secret-id/feedback', 'Feedback'],
     ['/cycles/cycle-secret-id/board', 'Retrospective board'],
     ['/cycles/cycle-secret-id/upload', 'Meeting upload'],
@@ -53,11 +51,14 @@ describe('placeholder routes', () => {
     })
   })
 
-  it('renders /projects and /projects/:id as different placeholders', async () => {
+  it('renders /projects and /projects/:id with the real projects screens, not placeholders', async () => {
     const first = renderSignedIn('/projects')
     expect(
-      await screen.findByRole('heading', { name: 'Projects' }),
+      await screen.findByRole('heading', { name: 'Projects', level: 1 }),
     ).toBeInTheDocument()
+    expect(
+      screen.queryByText('This screen is not built yet.'),
+    ).not.toBeInTheDocument()
     expect(
       screen.queryByRole('heading', { name: 'Project' }),
     ).not.toBeInTheDocument()
@@ -65,10 +66,13 @@ describe('placeholder routes', () => {
 
     renderSignedIn('/projects/project-1')
     expect(
-      await screen.findByRole('heading', { name: 'Project', level: 1 }),
+      await screen.findByText('Project not found or you do not have access.'),
     ).toBeInTheDocument()
     expect(
-      screen.queryByRole('heading', { name: 'Projects' }),
+      screen.queryByRole('heading', { name: 'Project', level: 1 }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('This screen is not built yet.'),
     ).not.toBeInTheDocument()
   })
 
