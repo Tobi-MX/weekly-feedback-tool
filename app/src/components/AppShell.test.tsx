@@ -2,6 +2,7 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { mockRestoredSession } from '../test/authMock'
 import { profileMock } from '../test/profileMock'
+import { projectsMock } from '../test/projectsMock'
 import { renderApp } from '../test/renderApp'
 
 async function renderSignedIn(
@@ -10,6 +11,13 @@ async function renderSignedIn(
 ): Promise<HTMLElement> {
   mockRestoredSession()
   profileMock.fetchProfileDisplayName.mockResolvedValue('Dev User')
+  if (path.startsWith('/projects/')) {
+    projectsMock.fetchProject.mockResolvedValue({
+      id: 'project-1',
+      name: 'Project One',
+      created_at: '2026-10-30T12:00:00.000Z',
+    })
+  }
   renderApp({ initialEntries: [path] })
   return screen.findByRole('heading', { name: heading })
 }
@@ -101,7 +109,7 @@ describe('AppShell', () => {
 
   it.each<[string, string, number]>([
     ['/projects', 'Projects', 1],
-    ['/projects/project-1', 'Project', 1],
+    ['/projects/project-1', 'Project One', 1],
     ['/cycles/abc/feedback', 'Feedback', 0],
     ['/cycles/abc/board', 'Retrospective board', 0],
     ['/cycles/abc/upload', 'Meeting upload', 0],
@@ -169,7 +177,7 @@ describe('AppShell', () => {
   })
 
   it('opens the mobile menu with the same active state and closes with Escape', async () => {
-    await renderSignedIn('/projects/project-1', 'Project')
+    await renderSignedIn('/projects/project-1', 'Project One')
 
     const { trigger, dialog } = await openMobileMenu()
 
@@ -191,7 +199,7 @@ describe('AppShell', () => {
   })
 
   it('closes the mobile menu after navigating to another route', async () => {
-    await renderSignedIn('/projects/project-1', 'Project')
+    await renderSignedIn('/projects/project-1', 'Project One')
 
     const { dialog } = await openMobileMenu()
     fireEvent.click(within(dialog).getByRole('link', { name: 'Projects' }))

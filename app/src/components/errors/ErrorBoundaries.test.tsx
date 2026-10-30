@@ -4,16 +4,11 @@ import { mockRestoredSession } from '../../test/authMock'
 import { profileMock } from '../../test/profileMock'
 import { renderApp } from '../../test/renderApp'
 
-vi.mock('../../routes/Placeholders', async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import('../../routes/Placeholders')>()
-  return {
-    ...actual,
-    ProjectPage: function ThrowingProjectPage(): never {
-      throw new Error('route render failed')
-    },
-  }
-})
+vi.mock('../../projects/ProjectPage', () => ({
+  default: function ThrowingProjectPage(): never {
+    throw new Error('route render failed')
+  },
+}))
 
 vi.mock('../../auth/LoginPage', () => ({
   default: function ThrowingLoginPage(): never {

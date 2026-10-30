@@ -5,6 +5,7 @@ import { afterEach, beforeEach, vi } from 'vitest'
 import { queryClient } from './lib/queryClient'
 import { resetAuthMock } from './test/authMock'
 import { resetProfileMock } from './test/profileMock'
+import { resetProjectsMock } from './test/projectsMock'
 
 // Every test file gets the shared auth-module mock. Tests configure results
 // through `authMock`; no test needs a Supabase stack or app/.env.local.
@@ -17,6 +18,13 @@ vi.mock('./auth/authClient', async () => {
 // rendered without a backend. Tests configure it through `profileMock`.
 vi.mock('./profile/profileApi', async () => {
   const { profileMock: mock } = await import('./test/profileMock')
+  return mock
+})
+
+// Projects data uses the same shared-controller pattern, so list, detail, and
+// create tests never reach the network.
+vi.mock('./projects/projectsApi', async () => {
+  const { projectsMock: mock } = await import('./test/projectsMock')
   return mock
 })
 
@@ -55,6 +63,7 @@ if (typeof Element.prototype.scrollIntoView !== 'function') {
 beforeEach(() => {
   resetAuthMock()
   resetProfileMock()
+  resetProjectsMock()
   // Sonner keeps its toast queue outside React, so dismiss it between tests.
   toast.dismiss()
   // The QueryClient is a singleton in the app; reset it between tests so one
