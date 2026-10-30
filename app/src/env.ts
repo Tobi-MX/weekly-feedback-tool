@@ -6,6 +6,12 @@ export interface ConfiguredEnv {
 
 export interface NotConfiguredEnv {
   readonly status: 'not-configured'
+  /**
+   * Set when both values are present but the URL cannot be used. The status
+   * indicator reports this as Unreachable instead of pretending the URL points
+   * at a backend.
+   */
+  readonly reason?: 'invalid-url'
 }
 
 export type EnvConfig = ConfiguredEnv | NotConfiguredEnv
@@ -20,28 +26,46 @@ function normalizeValue(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined
 }
 
-function normalizeUrl(value: string | undefined): string | undefined {
-  const trimmed = normalizeValue(value)
-  if (!trimmed) {
+function parseSupabaseUrl(value: string): string | undefined {
+  // The status check appends its own path, so a trailing slash would produce
+  // a double slash in the request URL.
+  const withoutTrailingSlashes = value.replace(/\/+$/, '')
+  if (!withoutTrailingSlashes) {
     return undefined
   }
 
-  // The status check appends its own path, so a trailing slash would produce
-  // a double slash in the request URL.
-  const withoutTrailingSlashes = trimmed.replace(/\/+$/, '')
-  return withoutTrailingSlashes || undefined
+  try {
+    const parsed = new URL(withoutTrailingSlashes)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return undefined
+    }
+  } catch {
+    return undefined
+  }
+
+  return withoutTrailingSlashes
 }
 
 /**
- * Turns raw Vite environment values into a typed result. A value that is
- * missing, empty, or whitespace-only means the backend is not configured.
+ * Turns raw Vite environment values into a typed result.
+ *
+ * Missing, empty, or whitespace-only values mean the backend is not
+ * configured. A non-empty URL that is not an absolute http(s) URL is also
+ * reported as not configured, but with an `invalid-url` reason: `fetch` would
+ * resolve a relative value against the dev-server origin, whose SPA fallback
+ * can answer 200 and make a broken configuration look Connected.
  */
 export function parseEnvConfig(env: EnvSource): EnvConfig {
-  const url = normalizeUrl(env.VITE_SUPABASE_URL)
+  const rawUrl = normalizeValue(env.VITE_SUPABASE_URL)
   const anonKey = normalizeValue(env.VITE_SUPABASE_ANON_KEY)
 
-  if (!url || !anonKey) {
+  if (!rawUrl || !anonKey) {
     return { status: 'not-configured' }
+  }
+
+  const url = parseSupabaseUrl(rawUrl)
+  if (!url) {
+    return { status: 'not-configured', reason: 'invalid-url' }
   }
 
   return { status: 'configured', url, anonKey }

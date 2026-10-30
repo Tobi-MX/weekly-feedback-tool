@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { getEnvConfig } from './env'
+import type { EnvConfig } from './env'
 
 const CHECK_TIMEOUT_MS = 5_000
 
@@ -13,10 +14,22 @@ const STATUS_LABELS: Record<BackendStatusValue, string> = {
   'not-configured': 'Not configured',
 }
 
+function isInvalidUrl(config: EnvConfig): boolean {
+  return config.status === 'not-configured' && config.reason === 'invalid-url'
+}
+
+function initialStatus(config: EnvConfig): BackendStatusValue {
+  if (config.status === 'configured') {
+    return 'checking'
+  }
+
+  return isInvalidUrl(config) ? 'unreachable' : 'not-configured'
+}
+
 export function BackendStatus() {
   const [config] = useState(getEnvConfig)
   const [status, setStatus] = useState<BackendStatusValue>(() =>
-    config.status === 'configured' ? 'checking' : 'not-configured',
+    initialStatus(config),
   )
   const [attempt, setAttempt] = useState(0)
 
@@ -68,9 +81,18 @@ export function BackendStatus() {
   }, [attempt, config])
 
   const retry = useCallback(() => {
+    if (config.status !== 'configured') {
+      // An invalid URL needs a corrected app/.env.local and a dev-server
+      // restart, so a retry cannot turn it into a successful check.
+      setStatus(isInvalidUrl(config) ? 'unreachable' : 'not-configured')
+      return
+    }
+
     setStatus('checking')
     setAttempt((value) => value + 1)
-  }, [])
+  }, [config])
+
+  const canRetry = config.status === 'configured' || isInvalidUrl(config)
 
   return (
     <section aria-labelledby="backend-status-heading">
@@ -85,13 +107,22 @@ export function BackendStatus() {
         </p>
       )}
       {status === 'unreachable' && (
-        <p>
-          Could not reach the local Supabase API. Check that the stack is
-          running (<code>supabase start</code>) and that the URL and anon key in{' '}
-          <code>app/.env.local</code> are correct.
-        </p>
+        <>
+          <p>
+            Could not reach the local Supabase API. Check that the stack is
+            running (<code>supabase start</code>) and that the URL and anon key
+            in <code>app/.env.local</code> are correct.
+          </p>
+          {isInvalidUrl(config) && (
+            <p>
+              The configured URL must be an absolute <code>http://</code> or{' '}
+              <code>https://</code> address. Fix <code>VITE_SUPABASE_URL</code>{' '}
+              in <code>app/.env.local</code> and restart the dev server.
+            </p>
+          )}
+        </>
       )}
-      {config.status === 'configured' && (
+      {canRetry && (
         <button type="button" onClick={retry} disabled={status === 'checking'}>
           Retry
         </button>

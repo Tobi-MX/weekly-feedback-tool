@@ -8,7 +8,6 @@ import {
 } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Mock } from 'vitest'
-import type { EnvConfig } from './env'
 import BackendStatus from './BackendStatus'
 
 type FetchLike = (
@@ -16,21 +15,17 @@ type FetchLike = (
   init?: RequestInit,
 ) => Promise<Response>
 
-const testEnv = vi.hoisted(() => ({
-  config: { status: 'not-configured' } as EnvConfig,
-}))
-
-vi.mock('./env', () => ({
-  getEnvConfig: () => testEnv.config,
-}))
-
-const CONFIGURED: EnvConfig = {
-  status: 'configured',
-  url: 'http://127.0.0.1:54321',
-  anonKey: 'test-anon-key',
-}
+const SUPABASE_URL = 'http://127.0.0.1:54321'
+const ANON_KEY = 'test-anon-key'
 
 let fetchMock: Mock<FetchLike>
+
+// Stub the real Vite environment instead of mocking ./env so these tests
+// exercise the actual URL validation in parseEnvConfig.
+function configure(url = SUPABASE_URL, anonKey = ANON_KEY): void {
+  vi.stubEnv('VITE_SUPABASE_URL', url)
+  vi.stubEnv('VITE_SUPABASE_ANON_KEY', anonKey)
+}
 
 function respondWith(status: number): void {
   fetchMock.mockResolvedValue(new Response(null, { status }))
@@ -41,7 +36,7 @@ function statusRegion(): HTMLElement {
 }
 
 beforeEach(() => {
-  testEnv.config = CONFIGURED
+  configure()
   fetchMock = vi.fn<FetchLike>()
   vi.stubGlobal('fetch', fetchMock)
 })
@@ -49,18 +44,28 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.useRealTimers()
+  vi.unstubAllEnvs()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
 
 describe('BackendStatus', () => {
-  it('shows Not configured without requesting when configuration is missing', () => {
-    testEnv.config = { status: 'not-configured' }
+  it('shows Not configured without requesting when both values are missing', () => {
+    configure('', '')
 
     render(<BackendStatus />)
 
     expect(statusRegion()).toHaveTextContent('Not configured')
     expect(screen.getByText(/app\/\.env\.example/)).toBeInTheDocument()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('shows Not configured without requesting when the anon key is missing', () => {
+    configure(SUPABASE_URL, '')
+
+    render(<BackendStatus />)
+
+    expect(statusRegion()).toHaveTextContent('Not configured')
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
@@ -136,19 +141,24 @@ describe('BackendStatus', () => {
     })
   })
 
-  it('shows Unreachable for an unparseable URL', async () => {
-    testEnv.config = {
-      status: 'configured',
-      url: 'not a valid url',
-      anonKey: 'test-anon-key',
-    }
-    fetchMock.mockRejectedValue(new TypeError('Failed to parse URL'))
+  it('shows Unreachable for a relative URL without sending a request', () => {
+    configure('not a valid url')
 
     render(<BackendStatus />)
 
-    await waitFor(() => {
-      expect(statusRegion()).toHaveTextContent('Unreachable')
-    })
+    expect(statusRegion()).toHaveTextContent('Unreachable')
+    expect(screen.getByText(/must be an absolute/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('shows Unreachable for a non-HTTP URL without sending a request', () => {
+    configure('ftp://example.test')
+
+    render(<BackendStatus />)
+
+    expect(statusRegion()).toHaveTextContent('Unreachable')
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('aborts after 5 seconds and shows Unreachable', async () => {

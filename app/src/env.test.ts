@@ -114,4 +114,28 @@ describe('parseEnvConfig', () => {
       anonKey: ANON_KEY,
     })
   })
+
+  it.each([
+    ['a relative phrase', 'not a valid url'],
+    ['a relative path', '/rest/v1'],
+    ['a protocol-relative URL', '//example.test'],
+    ['a non-HTTP protocol', 'ftp://example.test'],
+    ['a malformed URL', 'http://[::1'],
+  ])(
+    'reports %s as not configured with an invalid-url reason',
+    (_label, invalidUrl) => {
+      expect(
+        parseEnvConfig({
+          VITE_SUPABASE_URL: invalidUrl,
+          VITE_SUPABASE_ANON_KEY: ANON_KEY,
+        }),
+      ).toEqual({ status: 'not-configured', reason: 'invalid-url' })
+    },
+  )
+
+  it('reports a missing anon key as not configured even when the URL is invalid', () => {
+    expect(parseEnvConfig({ VITE_SUPABASE_URL: 'not a valid url' })).toEqual({
+      status: 'not-configured',
+    })
+  })
 })

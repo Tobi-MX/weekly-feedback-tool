@@ -105,13 +105,13 @@ are `supabase/config.toml` and `supabase/.gitignore`.
 
 ## Local ports
 
-| Service        | URL / port              |
-| -------------- | ----------------------- |
-| Supabase API   | <http://127.0.0.1:54321> |
-| Postgres       | `127.0.0.1:54322`       |
-| Supabase Studio| <http://127.0.0.1:54323> |
-| Mailpit        | <http://127.0.0.1:54324> |
-| Vite dev server| <http://localhost:5173> |
+| Service         | URL / port               |
+| --------------- | ------------------------ |
+| Supabase API    | <http://127.0.0.1:54321> |
+| Postgres        | `127.0.0.1:54322`        |
+| Supabase Studio | <http://127.0.0.1:54323> |
+| Mailpit         | <http://127.0.0.1:54324> |
+| Vite dev server | <http://localhost:5173>  |
 
 ## Troubleshooting
 
@@ -128,8 +128,15 @@ The page did not find both public variables, so it did not make a request.
 
 ### Status shows "Unreachable"
 
-The app sent the request but did not receive a 2xx response within 5 seconds.
+The app could not confirm that the local API is reachable. It shows this state
+after a timeout, a network error, or a non-2xx response, and immediately when
+`VITE_SUPABASE_URL` is not an absolute `http://` or `https://` URL (in that
+case no request is sent).
 
+- `VITE_SUPABASE_URL` is not an absolute `http://` or `https://` URL (for
+  example `not a valid url` or `/rest/v1`). The app rejects this value without
+  sending a request. Copy `API_URL` from `supabase status -o env` into
+  `app/.env.local` and restart the dev server.
 - The stack is not running. Check `supabase status`, then run `supabase start`.
 - Docker is not running. Start Docker Desktop and confirm `docker info`
   succeeds, then run `supabase start`.
