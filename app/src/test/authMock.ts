@@ -100,6 +100,21 @@ export function makeSession(
   }
 }
 
+/** Configures the mock so the next app render restores the given user. */
+export function mockRestoredSession(
+  email = 'dev@example.com',
+  id = 'user-1',
+): Session {
+  const session = makeSession(email, { user: makeUser(email, id) })
+  authMock.getSession.mockResolvedValue({ session, error: null })
+  return session
+}
+
+/** Configures the mock so the next app render has no persisted session. */
+export function mockEmptySession(): void {
+  authMock.getSession.mockResolvedValue({ session: null, error: null })
+}
+
 export interface Deferred<T> {
   readonly promise: Promise<T>
   resolve: (value: T) => void
