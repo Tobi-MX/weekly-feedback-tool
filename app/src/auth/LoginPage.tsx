@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Navigate, useLocation } from 'react-router-dom'
+import { Button } from '@/components/ui/button'
 import { useAuth } from './AuthProvider'
 import type { AuthErrorCode } from './authClient'
 import AuthConfigurationNotice from './AuthConfigurationNotice'
@@ -109,37 +110,60 @@ export function LoginPage() {
   }
 
   return (
-    <section aria-labelledby="login-heading">
-      <h2 id="login-heading">Sign in</h2>
+    <section
+      aria-labelledby="login-heading"
+      className="rounded-lg border bg-card p-6 text-card-foreground shadow-sm"
+    >
+      <h2 id="login-heading" className="text-2xl font-semibold tracking-tight">
+        Sign in
+      </h2>
 
       {status === 'unconfigured' && <AuthConfigurationNotice />}
 
-      <form onSubmit={handleSubmit} noValidate>
-        <label htmlFor="login-email">Email</label>
-        <input
-          id="login-email"
-          name="email"
-          type="email"
-          autoComplete="email"
-          value={email}
-          aria-invalid={error !== null}
-          aria-describedby={error ? 'login-error' : undefined}
-          onChange={(event) => {
-            setEmail(event.target.value)
-            if (error) {
-              setError(null)
-            }
-          }}
-        />
-        <button type="submit" disabled={pending || status === 'unconfigured'}>
+      <form className="mt-6 space-y-4" onSubmit={handleSubmit} noValidate>
+        <div className="space-y-2">
+          <label htmlFor="login-email" className="text-sm font-medium">
+            Email
+          </label>
+          <input
+            id="login-email"
+            name="email"
+            type="email"
+            autoComplete="email"
+            value={email}
+            aria-invalid={error !== null}
+            aria-describedby={error ? 'login-error' : undefined}
+            className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50"
+            onChange={(event) => {
+              setEmail(event.target.value)
+              if (error) {
+                setError(null)
+              }
+            }}
+          />
+        </div>
+        <Button
+          type="submit"
+          className="w-full"
+          disabled={pending || status === 'unconfigured'}
+        >
           {pending ? 'Sending…' : 'Send sign-in link'}
-        </button>
+        </Button>
       </form>
 
-      <p id="login-status" role="status" aria-live="polite">
+      <p
+        id="login-status"
+        role="status"
+        aria-live="polite"
+        className="mt-4 min-h-5 text-sm text-muted-foreground"
+      >
         {statusMessage}
       </p>
-      <p id="login-error" role="alert">
+      <p
+        id="login-error"
+        role="alert"
+        className="mt-2 text-sm text-destructive"
+      >
         {alertMessage}
       </p>
     </section>

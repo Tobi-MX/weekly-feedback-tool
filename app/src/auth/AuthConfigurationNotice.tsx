@@ -6,8 +6,13 @@
  */
 export function AuthConfigurationNotice() {
   return (
-    <section aria-labelledby="auth-configuration-heading">
-      <h2 id="auth-configuration-heading">Sign-in is not configured</h2>
+    <section
+      aria-labelledby="auth-configuration-heading"
+      className="mt-4 space-y-2 rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm"
+    >
+      <h2 id="auth-configuration-heading" className="font-semibold">
+        Sign-in is not configured
+      </h2>
       <p>
         Supabase authentication is not configured, so sign-in is unavailable.
         Copy <code>app/.env.example</code> to <code>app/.env.local</code>, fill
