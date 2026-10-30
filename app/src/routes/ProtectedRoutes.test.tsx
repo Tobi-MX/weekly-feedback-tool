@@ -45,9 +45,14 @@ describe('protected routes', () => {
       screen.queryByRole('heading', { name: 'Projects' }),
     ).not.toBeInTheDocument()
     expect(screen.getByLabelText('Email')).toBeInTheDocument()
-    expect(
-      navigationLog.filter((entry) => entry.startsWith('/login')),
-    ).toHaveLength(1)
+    await waitFor(() => {
+      expect(navigationLog).toContain(
+        '/login?redirectTo=%2Fprojects%3Ftab%3Dmembers',
+      )
+      expect(
+        navigationLog.filter((entry) => entry.startsWith('/login')),
+      ).toHaveLength(1)
+    })
   })
 
   it('renders a protected route directly for a signed-in user', async () => {
@@ -65,6 +70,9 @@ describe('protected routes', () => {
     expect(screen.getByText(/dev@example.com/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeEnabled()
     expect(screen.queryByLabelText('Email')).not.toBeInTheDocument()
+    await waitFor(() => {
+      expect(navigationLog).toContain('/projects')
+    })
     expect(navigationLog).not.toContain('/login')
     expect(screen.getByText(/Backend status:/)).toBeInTheDocument()
   })
@@ -83,12 +91,15 @@ describe('protected routes', () => {
     expect(
       await screen.findByRole('heading', { name: 'Projects' }),
     ).toBeInTheDocument()
+    await waitFor(() => {
+      expect(navigationLog).toContain('/projects')
+    })
     expect(
       navigationLog.filter((entry) => entry.startsWith('/login')),
     ).toHaveLength(0)
   })
 
-  it('shows the configuration notice instead of redirecting when unconfigured', () => {
+  it('shows the configuration notice instead of redirecting when unconfigured', async () => {
     authMock.isSupabaseConfigured = false
     const navigationLog: string[] = []
 
@@ -99,6 +110,9 @@ describe('protected routes', () => {
     ).toBeInTheDocument()
     expect(screen.getByText(/_docs\/local-development\.md/)).toBeInTheDocument()
     expect(locationText()).toBe('/projects')
+    await waitFor(() => {
+      expect(navigationLog).toContain('/projects')
+    })
     expect(navigationLog).not.toContain('/login')
     expect(authMock.getSession).not.toHaveBeenCalled()
     expect(screen.queryByLabelText('Email')).not.toBeInTheDocument()
@@ -114,9 +128,12 @@ describe('protected routes', () => {
       renderApp({ initialEntries: [entry], navigationLog })
 
       await waitForLocation('/login?redirectTo=%2Fprojects')
-      expect(
-        navigationLog.filter((value) => value.startsWith('/login')),
-      ).toHaveLength(1)
+      await waitFor(() => {
+        expect(navigationLog).toContain('/login?redirectTo=%2Fprojects')
+        expect(
+          navigationLog.filter((value) => value.startsWith('/login')),
+        ).toHaveLength(1)
+      })
     },
   )
 
@@ -144,9 +161,14 @@ describe('protected routes', () => {
       screen.queryByRole('heading', { name: 'Projects' }),
     ).not.toBeInTheDocument()
     expect(screen.queryByText('Loading…')).not.toBeInTheDocument()
-    expect(
-      navigationLog.filter((entry) => entry.startsWith('/login')),
-    ).toHaveLength(1)
+    await waitFor(() => {
+      expect(navigationLog).toContain(
+        '/login?redirectTo=%2Fprojects%3Ftab%3Dmembers',
+      )
+      expect(
+        navigationLog.filter((entry) => entry.startsWith('/login')),
+      ).toHaveLength(1)
+    })
 
     await act(async () => {
       await Promise.resolve()
@@ -181,8 +203,8 @@ describe('protected routes', () => {
       expect(navigationLog.filter((entry) => entry === '/login')).toHaveLength(
         1,
       )
+      expect(navigationLog).not.toContain('/login?redirectTo=%2Fprojects')
     })
-    expect(navigationLog).not.toContain('/login?redirectTo=%2Fprojects')
   })
 
   it('disables Sign out and sends one request when clicked twice', async () => {

@@ -78,6 +78,9 @@ describe('AuthCallbackPage', () => {
       REFRESH_TOKEN,
     )
 
+    await waitFor(() => {
+      expect(navigationLog).toContain('/projects/1?tab=members')
+    })
     expectNoSecrets(container.textContent ?? '')
     expectNoSecrets(document.body.textContent ?? '')
     expectNoSecrets(navigationLog.join(' '))
@@ -100,11 +103,11 @@ describe('AuthCallbackPage', () => {
 
     await waitFor(() => {
       expect(locationText()).toBe('/projects')
+      expect(navigationLog).toContain('/projects')
     })
 
     expect(navigationLog.join(' ')).not.toContain(ACCESS_TOKEN)
     expect(navigationLog.join(' ')).not.toContain(REFRESH_TOKEN)
-    expect(navigationLog).toContain('/projects')
   })
 
   it('lands on /projects without consuming the link when a session exists', async () => {
@@ -169,9 +172,11 @@ describe('AuthCallbackPage', () => {
     })
 
     expect(authMock.setSession).toHaveBeenCalledTimes(1)
-    expect(navigationLog.filter((entry) => entry === '/projects')).toHaveLength(
-      1,
-    )
+    await waitFor(() => {
+      expect(
+        navigationLog.filter((entry) => entry === '/projects'),
+      ).toHaveLength(1)
+    })
 
     act(() => {
       authMock.emitAuthEvent('SIGNED_IN', makeSession('dev@example.com'))
