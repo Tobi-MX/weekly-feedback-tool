@@ -62,6 +62,44 @@ default configuration.
 
 Restart `npm run dev` after changing `app/.env.local`.
 
+## Signing in with a magic link
+
+An email magic link is the only sign-in method for this task. The seed user
+`dev@example.com` exists in the local database, but its `password123` password
+is not a sign-in method here; enter the address and use the emailed link.
+
+1. Start the stack and the dev server (see [First run](#first-run)) and open
+   <http://localhost:5173/login>.
+2. Enter `dev@example.com` (or any local-only address such as
+   `you@example.test`) and press **Send sign-in link**.
+3. Open Mailpit at <http://127.0.0.1:54324>, select the newest email for that
+   address, and open its sign-in link on the same machine. The link goes
+   through `/auth/callback` and lands on
+   <http://localhost:5173/projects>.
+4. To end the session, press **Sign out** on `/projects`. You return to
+   `/login`; a reload or a direct visit to `/projects` redirects back to
+   `/login?redirectTo=%2Fprojects`.
+
+Local emails are limited to **two per hour**. If the app says "Too many
+sign-in emails were requested. Wait about an hour, then try again.", wait for
+the limit to reset or restart the stack with `supabase stop && supabase start`.
+Magic links expire after **one hour**; an expired, already-used, or malformed
+link shows "This sign-in link is invalid or has expired" on `/login`, where you
+can request a new link.
+
+`localhost` and `127.0.0.1` are different browser origins. A session created at
+<http://localhost:5173> is not present at <http://127.0.0.1:5173>, so each
+origin needs its own sign-in. Both origins are allowed callback URLs in
+`supabase/config.toml`.
+
+After changing auth settings in `supabase/config.toml` (for example
+`site_url` or `additional_redirect_urls`), restart the stack so Auth reads
+them:
+
+```bash
+supabase stop && supabase start
+```
+
 ## Local stack commands
 
 All commands run from the repo root:
