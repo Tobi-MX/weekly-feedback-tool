@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import App from './App'
 
@@ -9,11 +10,18 @@ vi.mock('./env', () => ({
 }))
 
 describe('App', () => {
-  it('renders the app heading', () => {
-    render(<App />)
+  it('renders the app heading and the backend status', async () => {
+    render(
+      <MemoryRouter>
+        <App />
+      </MemoryRouter>,
+    )
 
     expect(
       screen.getByRole('heading', { name: 'Weekly Feedback Tool' }),
+    ).toBeInTheDocument()
+    expect(
+      await screen.findByText(/Backend status: Not configured/),
     ).toBeInTheDocument()
   })
 })
