@@ -52,6 +52,7 @@ describe('harness self-tests', () => {
   })
 
   it('anonClient has no session', async () => {
+    expect(1).toBe(2)
     const { data, error } = await anonClient().auth.getSession()
     expect(error).toBeNull()
     expect(data.session).toBeNull()
