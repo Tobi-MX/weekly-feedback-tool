@@ -1,4 +1,5 @@
 import { supabase } from '@/auth/supabaseClient'
+import { isProjectId } from './projectId'
 
 /** The narrow row shape the projects list and project page select. */
 export interface ProjectSummary {
@@ -17,14 +18,9 @@ export interface CreatedProject {
   readonly id: string
 }
 
-// The API rejects a non-UUID id before it reaches PostgREST, so an unknown or
-// malformed id becomes the same not-found state instead of a database error.
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
-export function isProjectId(value: string): boolean {
-  return UUID_PATTERN.test(value)
-}
+// The UUID guard lives in its own module so the members API can reuse it
+// without importing this (mocked in tests) module.
+export { isProjectId }
 
 /**
  * Lists the signed-in user's projects newest first. RLS is the row boundary,

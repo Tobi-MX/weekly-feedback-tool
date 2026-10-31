@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { afterEach, beforeEach, vi } from 'vitest'
 import { queryClient } from './lib/queryClient'
 import { resetAuthMock } from './test/authMock'
+import { resetMembersMock } from './test/membersMock'
 import { resetProfileMock } from './test/profileMock'
 import { resetProjectsMock } from './test/projectsMock'
 
@@ -25,6 +26,13 @@ vi.mock('./profile/profileApi', async () => {
 // create tests never reach the network.
 vi.mock('./projects/projectsApi', async () => {
   const { projectsMock: mock } = await import('./test/projectsMock')
+  return mock
+})
+
+// Membership and invite RPCs use the same pattern, so members and join tests
+// never reach the network.
+vi.mock('./projects/membersApi', async () => {
+  const { membersMock: mock } = await import('./test/membersMock')
   return mock
 })
 
@@ -64,6 +72,7 @@ beforeEach(() => {
   resetAuthMock()
   resetProfileMock()
   resetProjectsMock()
+  resetMembersMock()
   // Sonner keeps its toast queue outside React, so dismiss it between tests.
   toast.dismiss()
   // The QueryClient is a singleton in the app; reset it between tests so one
