@@ -48,7 +48,7 @@ describe('Toaster', () => {
     first.unmount()
 
     const second = await renderSignedIn('/projects/project-1')
-    await screen.findByRole('heading', { name: 'Project' })
+    await screen.findByText('Project not found or you do not have access.')
     expect(toastViewports()).toHaveLength(1)
     second.unmount()
 
@@ -67,7 +67,7 @@ describe('Toaster', () => {
     fireEvent.click(screen.getByRole('link', { name: 'Open project' }))
 
     expect(
-      await screen.findByRole('heading', { name: 'Project' }),
+      await screen.findByText('Project not found or you do not have access.'),
     ).toBeInTheDocument()
     expect(screen.getByText('Route toast')).toBeVisible()
     expect(screen.getByTestId('location')).toHaveTextContent(

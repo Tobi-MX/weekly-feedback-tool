@@ -11,12 +11,12 @@ import { RootErrorFallback } from './components/errors/ErrorFallbacks'
 import { PublicLayout } from './components/PublicLayout'
 import { queryClient } from './lib/queryClient'
 import { QueryCacheReset } from './profile/QueryCacheReset'
+import ProjectPage from './projects/ProjectPage'
 import ProjectsPage from './projects/ProjectsPage'
 import NotFoundPage from './routes/NotFoundPage'
 import {
   BoardPage,
   FeedbackPage,
-  ProjectPage,
   SummaryPage,
   UploadPage,
 } from './routes/Placeholders'
