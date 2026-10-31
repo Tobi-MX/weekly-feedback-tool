@@ -13,6 +13,13 @@ export interface RlsEnv {
   readonly serviceRoleKey: string
 }
 
+/** The environment variables the harness reads. Nothing else is read. */
+export const ENV_NAMES = {
+  url: 'SUPABASE_URL',
+  anonKey: 'SUPABASE_ANON_KEY',
+  serviceRoleKey: 'SUPABASE_SERVICE_ROLE_KEY',
+} as const
+
 /** Every run's users share this prefix, so the startup sweep can find them. */
 export const RLS_EMAIL_PREFIX = 'rls-'
 export const RLS_EMAIL_DOMAIN = '@example.test'
@@ -115,9 +122,9 @@ function nonEmpty(value: string | undefined): string | undefined {
 export async function resolveEnv(
   source: NodeJS.ProcessEnv = process.env,
 ): Promise<RlsEnv> {
-  let url = nonEmpty(source.SUPABASE_URL)
-  let anonKey = nonEmpty(source.SUPABASE_ANON_KEY)
-  let serviceRoleKey = nonEmpty(source.SUPABASE_SERVICE_ROLE_KEY)
+  let url = nonEmpty(source[ENV_NAMES.url])
+  let anonKey = nonEmpty(source[ENV_NAMES.anonKey])
+  let serviceRoleKey = nonEmpty(source[ENV_NAMES.serviceRoleKey])
 
   if (url !== undefined) {
     assertLocalUrl(url)

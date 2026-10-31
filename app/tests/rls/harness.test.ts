@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest'
 import { expectNoRows, expectPgError, expectRows } from './assertions'
 import {
   CLI_MISSING_MESSAGE,
+  ENV_NAMES,
   NON_LOCAL_MESSAGE,
   NOT_REACHABLE_MESSAGE,
   assertLocalUrl,
@@ -98,9 +99,9 @@ describe('harness guards', () => {
     )
     await expect(
       resolveEnv({
-        SUPABASE_URL: 'https://example.supabase.co',
-        SUPABASE_ANON_KEY: 'anon',
-        SUPABASE_SERVICE_ROLE_KEY: 'service',
+        [ENV_NAMES.url]: 'https://example.supabase.co',
+        [ENV_NAMES.anonKey]: 'anon',
+        [ENV_NAMES.serviceRoleKey]: 'service',
       }),
     ).rejects.toThrow(NON_LOCAL_MESSAGE)
   })
@@ -117,9 +118,9 @@ describe('harness guards', () => {
 
   it('prefers values already in the environment', async () => {
     const env = await resolveEnv({
-      SUPABASE_URL: 'http://localhost:9999/',
-      SUPABASE_ANON_KEY: 'anon-from-env',
-      SUPABASE_SERVICE_ROLE_KEY: 'service-from-env',
+      [ENV_NAMES.url]: 'http://localhost:9999/',
+      [ENV_NAMES.anonKey]: 'anon-from-env',
+      [ENV_NAMES.serviceRoleKey]: 'service-from-env',
     })
     expect(env).toEqual({
       url: 'http://localhost:9999',

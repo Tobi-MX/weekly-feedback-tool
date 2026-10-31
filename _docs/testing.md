@@ -62,8 +62,8 @@ A run signs in about twenty users. `supabase/config.toml` raises
 `generateLink` plus `verifyOtp`) stay under the limit; `email_sent` stays `2`.
 After changing them, run `supabase stop && supabase start`. With CLI 2.122.0
 the local Auth server did not rate-limit password sign-ins at all (checked with
-`sign_in_sign_ups` and, separately, `token_refresh` lowered to `5`), so the raised values are headroom rather than a
-requirement of the current method.
+`sign_in_sign_ups` and, separately, `token_refresh` lowered to `5`), so the
+raised values are headroom rather than a requirement of the current method.
 
 A sign-in rejected with HTTP 429 fails the run with a message that names the
 local auth rate limit and `[auth.rate_limit] sign_in_sign_ups` in
