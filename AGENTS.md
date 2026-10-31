@@ -13,6 +13,7 @@ React + TypeScript SPA (Vite) in `app/`, Supabase for Postgres, Auth, Storage, R
 - `cd app && npm run typecheck` - TypeScript check
 - `cd app && npm run lint` - lint
 - `cd app && npm run build` - production build
+- `cd app && npm run test:rls` - multi-user RLS suite against local Supabase
 - `cd app && npm run test:e2e` - Playwright end-to-end tests
 - `supabase start` - start local Supabase
 - `supabase db reset` - rebuild the local database from migrations
