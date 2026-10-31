@@ -10,7 +10,7 @@ create extension if not exists pgtap with schema extensions;
 
 set local search_path = public, extensions;
 
-select plan(135);
+select plan(138);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures: inserting auth.users rows fires private.handle_new_user().
@@ -64,7 +64,10 @@ select matches(pg_get_indexdef('public.projects_owner_created_idx'::regclass), '
 -- ---------------------------------------------------------------------------
 -- Exactly one updated_at trigger, calling the shared helper from #4.
 -- ---------------------------------------------------------------------------
-select is((select count(*)::int from pg_trigger where tgrelid = 'public.projects'::regclass and not tgisinternal), 1, 'projects has exactly one trigger');
+-- #8 adds the AFTER INSERT owner-membership trigger; it is the only other one.
+select is((select count(*)::int from pg_trigger where tgrelid = 'public.projects'::regclass and not tgisinternal), 2, 'projects has exactly two triggers (updated_at from #7, owner membership from #8)');
+select trigger_is('public', 'projects', 'projects_add_owner_member', 'private', 'add_project_owner_member', 'the #8 trigger calls private.add_project_owner_member');
+select is((select tgtype::int from pg_trigger where tgrelid = 'public.projects'::regclass and tgname = 'projects_add_owner_member'), 5, 'the #8 trigger is AFTER INSERT FOR EACH ROW');
 select trigger_is('public', 'projects', 'projects_set_updated_at', 'private', 'set_updated_at', 'the projects trigger calls private.set_updated_at');
 select is((select tgtype::int from pg_trigger where tgrelid = 'public.projects'::regclass and tgname = 'projects_set_updated_at'), 19, 'the projects trigger is BEFORE UPDATE FOR EACH ROW');
 select is((select count(*)::int from pg_proc where proname = 'set_updated_at'), 1, 'the migration does not create a second updated-at helper');
@@ -141,11 +144,12 @@ select is((select count(distinct id)::int from public.projects where owner_id = 
 -- ---------------------------------------------------------------------------
 select is((select relrowsecurity from pg_class where oid = 'public.projects'::regclass), true, 'RLS is enabled on projects');
 select is((select count(*)::int from pg_policies where schemaname = 'public' and tablename = 'projects'), 3, 'exactly three policies exist on projects');
-select policies_are('public', 'projects', array['projects_insert_own', 'projects_select_own', 'projects_update_own'], 'the three expected policies exist');
-select policy_cmd_is('public', 'projects', 'projects_select_own', 'SELECT', 'the select policy is FOR SELECT');
-select policy_roles_are('public', 'projects', 'projects_select_own', array['authenticated'], 'the select policy targets authenticated');
-select matches((select qual from pg_policies where schemaname = 'public' and tablename = 'projects' and policyname = 'projects_select_own'), 'owner_id = \( SELECT auth\.uid\(\)', 'the select policy uses owner_id = (select auth.uid())');
-select is((select with_check from pg_policies where schemaname = 'public' and tablename = 'projects' and policyname = 'projects_select_own'), null, 'the select policy has no WITH CHECK');
+select policies_are('public', 'projects', array['projects_insert_own', 'projects_select_member', 'projects_update_own'], 'the three expected policies exist');
+select policy_cmd_is('public', 'projects', 'projects_select_member', 'SELECT', 'the select policy is FOR SELECT');
+select policy_roles_are('public', 'projects', 'projects_select_member', array['authenticated'], 'the select policy targets authenticated');
+select matches((select qual from pg_policies where schemaname = 'public' and tablename = 'projects' and policyname = 'projects_select_member'), 'owner_id = \( SELECT auth\.uid\(\)', 'the select policy uses owner_id = (select auth.uid())');
+select is((select qual from pg_policies where schemaname = 'public' and tablename = 'projects' and policyname = 'projects_select_member'), '((owner_id = ( SELECT auth.uid() AS uid)) OR private.is_project_member(id))', 'the select policy is exactly owner_id = (select auth.uid()) or private.is_project_member(id)');
+select is((select with_check from pg_policies where schemaname = 'public' and tablename = 'projects' and policyname = 'projects_select_member'), null, 'the select policy has no WITH CHECK');
 select policy_cmd_is('public', 'projects', 'projects_insert_own', 'INSERT', 'the insert policy is FOR INSERT');
 select policy_roles_are('public', 'projects', 'projects_insert_own', array['authenticated'], 'the insert policy targets authenticated');
 select matches((select with_check from pg_policies where schemaname = 'public' and tablename = 'projects' and policyname = 'projects_insert_own'), 'owner_id = \( SELECT auth\.uid\(\)', 'the insert policy WITH CHECK uses owner_id = (select auth.uid())');

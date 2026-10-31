@@ -26,7 +26,9 @@ values
 -- ---------------------------------------------------------------------------
 select has_schema('private', 'private schema exists');
 select is(has_schema_privilege('anon', 'private', 'USAGE'), false, 'anon has no USAGE on the private schema');
-select is(has_schema_privilege('authenticated', 'private', 'USAGE'), false, 'authenticated has no USAGE on the private schema');
+-- #8 grants authenticated USAGE on private so RLS policies can call the two
+-- membership helpers; every other private function stays non-executable.
+select is(has_schema_privilege('authenticated', 'private', 'USAGE'), true, 'authenticated has USAGE on the private schema (granted by #8 for the membership helpers)');
 select is((select (count(*) filter (where a.grantee = 0))::int from pg_namespace n left join lateral aclexplode(n.nspacl) a on true where n.nspname = 'private'), 0, 'PUBLIC has no privilege on the private schema');
 
 select has_function('private', 'set_updated_at', 'private.set_updated_at() exists');
