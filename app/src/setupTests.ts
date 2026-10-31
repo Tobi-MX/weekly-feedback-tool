@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { afterEach, beforeEach, vi } from 'vitest'
 import { queryClient } from './lib/queryClient'
 import { resetAuthMock } from './test/authMock'
+import { resetCyclesMock } from './test/cyclesMock'
 import { resetMembersMock } from './test/membersMock'
 import { resetProfileMock } from './test/profileMock'
 import { resetProjectsMock } from './test/projectsMock'
@@ -33,6 +34,13 @@ vi.mock('./projects/projectsApi', async () => {
 // never reach the network.
 vi.mock('./projects/membersApi', async () => {
   const { membersMock: mock } = await import('./test/membersMock')
+  return mock
+})
+
+// Cycle reads and the cycle RPCs use the same pattern, so project page tests
+// never reach the network.
+vi.mock('./cycles/cyclesApi', async () => {
+  const { cyclesMock: mock } = await import('./test/cyclesMock')
   return mock
 })
 
@@ -73,6 +81,7 @@ beforeEach(() => {
   resetProfileMock()
   resetProjectsMock()
   resetMembersMock()
+  resetCyclesMock()
   // Sonner keeps its toast queue outside React, so dismiss it between tests.
   toast.dismiss()
   // The QueryClient is a singleton in the app; reset it between tests so one
