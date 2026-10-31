@@ -13,7 +13,7 @@ create extension if not exists pgtap with schema extensions;
 
 set local search_path = public, extensions;
 
-select plan(275);
+select plan(283);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures: inserting auth.users rows fires private.handle_new_user(), and
@@ -312,7 +312,12 @@ reset role;
 -- Unauthenticated callers cannot join.
 set local role authenticated;
 set local request.jwt.claims = '{"role":"authenticated"}';
-select throws_ok(format('select * from public.join_project(%L)', current_setting('test.token4')), '42501'::char(5), NULL, 'a call with a null auth.uid() raises 42501');
+select throws_ok(format('select * from public.join_project(%L)', current_setting('test.token4')), '42501'::char(5), 'not_project_member', 'join_project with a null auth.uid() raises 42501 not_project_member');
+select throws_ok($$ select * from public.create_project_invite('20000000-0000-4000-8000-000000000001') $$, '42501'::char(5), 'not_project_owner', 'create_project_invite with a null auth.uid() raises 42501 not_project_owner');
+select throws_ok($$ select * from public.get_project_invite('20000000-0000-4000-8000-000000000001') $$, '42501'::char(5), 'not_project_owner', 'get_project_invite with a null auth.uid() raises 42501 not_project_owner');
+select throws_ok($$ select public.revoke_project_invite('20000000-0000-4000-8000-000000000001') $$, '42501'::char(5), 'not_project_owner', 'revoke_project_invite with a null auth.uid() raises 42501 not_project_owner');
+select throws_ok($$ select * from public.get_project_members('20000000-0000-4000-8000-000000000001') $$, '42501'::char(5), 'not_project_member', 'get_project_members with a null auth.uid() raises 42501 not_project_member');
+select throws_ok($$ select public.transfer_facilitator('20000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000001') $$, '42501'::char(5), 'not_project_owner', 'transfer_facilitator with a null auth.uid() raises 42501 not_project_owner');
 reset role;
 set local role anon;
 select throws_ok(format('select * from public.join_project(%L)', current_setting('test.token4')), '42501'::char(5), NULL, 'anon cannot execute join_project');
@@ -505,6 +510,35 @@ select is((select (count(*) filter (where a.grantee = 0))::int from pg_proc p le
 select matches((select prosrc from pg_proc where oid = 'private.assert_project_owner(uuid)'::regprocedure), 'owner_id = \(select auth\.uid\(\)\)', 'the owner check compares owner_id to (select auth.uid())');
 select is((select prosecdef from pg_proc where oid = 'private.assert_project_owner(uuid)'::regprocedure), true, 'assert_project_owner is security definer');
 select is((select proconfig from pg_proc where oid = 'private.assert_project_owner(uuid)'::regprocedure), array['search_path=""']::text[], 'assert_project_owner fixes search_path to empty');
+-- Every message raised by the RPCs and the owner check is one of the five
+-- stable codes, and every raise sets an explicit message.
+select is(
+  (select count(*)::int
+     from pg_proc p
+     join pg_namespace n on n.oid = p.pronamespace
+     cross join lateral regexp_matches(p.prosrc, 'message\s*=\s*''([^'']*)''', 'g') as m(msg)
+    where (n.nspname, p.proname) in (('public', 'create_project_invite'), ('public', 'get_project_invite'), ('public', 'revoke_project_invite'), ('public', 'join_project'), ('public', 'get_project_members'), ('public', 'transfer_facilitator'), ('private', 'assert_project_owner'))
+      and m.msg[1] not in ('not_project_owner', 'not_project_member', 'invite_invalid', 'invite_expired', 'target_not_member')),
+  0,
+  'no RPC raises a message outside the five stable codes'
+);
+select is(
+  (select count(*)::int
+     from pg_proc p
+     join pg_namespace n on n.oid = p.pronamespace
+     cross join lateral regexp_matches(p.prosrc, 'message\s*=\s*''([^'']*)''', 'g') as m(msg)
+    where (n.nspname, p.proname) in (('public', 'create_project_invite'), ('public', 'get_project_invite'), ('public', 'revoke_project_invite'), ('public', 'join_project'), ('public', 'get_project_members'), ('public', 'transfer_facilitator'), ('private', 'assert_project_owner'))),
+  7,
+  'the RPCs raise exactly the seven expected coded errors'
+);
+select is(
+  (select sum((select count(*) from regexp_matches(p.prosrc, '\mraise\M', 'gi')))::int
+     from pg_proc p
+     join pg_namespace n on n.oid = p.pronamespace
+    where (n.nspname, p.proname) in (('public', 'create_project_invite'), ('public', 'get_project_invite'), ('public', 'revoke_project_invite'), ('public', 'join_project'), ('public', 'get_project_members'), ('public', 'transfer_facilitator'), ('private', 'assert_project_owner'))),
+  7,
+  'every raise in the RPCs uses a coded message (no raise without one)'
+);
 
 select * from finish();
 rollback;

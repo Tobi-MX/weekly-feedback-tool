@@ -346,7 +346,8 @@ declare
   inserted_count integer;
 begin
   if caller is null then
-    raise exception using errcode = '42501', message = 'not_authenticated';
+    -- A caller without auth.uid() is a member of no project.
+    raise exception using errcode = '42501', message = 'not_project_member';
   end if;
 
   -- The token is validated before membership so members and non-members see
