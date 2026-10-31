@@ -1,5 +1,6 @@
 import { Link, useParams } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
+import { ProjectCycles } from '@/cycles/ProjectCycles'
 import { formatProjectDate } from './projectDate'
 import { useProjectQuery } from './useProjects'
 
@@ -49,23 +50,23 @@ export function ProjectPage() {
       ) : null}
 
       {projectQuery.isSuccess && project !== undefined && project !== null ? (
-        <div className="min-w-0 space-y-3">
-          <h1 className="min-w-0 break-words text-2xl font-semibold tracking-tight [overflow-wrap:anywhere]">
-            {project.name}
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            {formatProjectDate(project.created_at)}
-          </p>
-          <Link
-            to={`/projects/${project.id}/members`}
-            className="inline-block text-sm font-medium underline underline-offset-4"
-          >
-            Members
-          </Link>
-          <p className="text-sm text-muted-foreground">
-            This screen is not built yet.
-          </p>
-        </div>
+        <>
+          <div className="min-w-0 space-y-3">
+            <h1 className="min-w-0 break-words text-2xl font-semibold tracking-tight [overflow-wrap:anywhere]">
+              {project.name}
+            </h1>
+            <p className="text-sm text-muted-foreground">
+              {formatProjectDate(project.created_at)}
+            </p>
+            <Link
+              to={`/projects/${project.id}/members`}
+              className="inline-block text-sm font-medium underline underline-offset-4"
+            >
+              Members
+            </Link>
+          </div>
+          <ProjectCycles projectId={project.id} />
+        </>
       ) : null}
     </section>
   )
