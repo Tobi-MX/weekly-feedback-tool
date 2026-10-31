@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto'
 import type { TestProject } from 'vitest/node'
 import { createAdminClient, sweepUsers } from './admin'
 import {
+  HarnessSetupError,
   RLS_EMAIL_DOMAIN,
   RLS_EMAIL_PREFIX,
   assertReachable,
@@ -25,8 +26,18 @@ declare module 'vitest' {
 export default async function setup(
   project: TestProject,
 ): Promise<() => Promise<void>> {
-  const env = await resolveEnv()
-  await assertReachable(env)
+  let env: RlsEnv
+  try {
+    env = await resolveEnv()
+    await assertReachable(env)
+  } catch (error) {
+    if (error instanceof HarnessSetupError) {
+      // One readable line and a non-zero exit, before any test is collected.
+      process.stderr.write(`\n${error.message}\n\n`)
+      process.exit(1)
+    }
+    throw error
+  }
 
   const admin = createAdminClient(env)
 
