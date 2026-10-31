@@ -25,6 +25,13 @@ export default defineConfig([
     },
   },
   {
+    // The RLS suite runs in Node against the local Supabase stack.
+    files: ['tests/rls/**/*.ts', 'vitest.rls.config.ts'],
+    languageOptions: {
+      globals: globals.node,
+    },
+  },
+  {
     files: ['**/*.js'],
     extends: [js.configs.recommended],
     languageOptions: {

@@ -80,9 +80,14 @@ is not a sign-in method here; enter the address and use the emailed link.
    `/login`; a reload or a direct visit to `/projects` redirects back to
    `/login?redirectTo=%2Fprojects`.
 
-Local emails are limited to **two per hour**. If the app says "Too many
-sign-in emails were requested. Wait about an hour, then try again.", wait for
-the limit to reset or restart the stack with `supabase stop && supabase start`.
+Local Auth does not enforce the `[auth.rate_limit] email_sent` limit while the
+stack sends mail to its built-in Mailpit instead of a custom
+`[auth.email.smtp]` server, so repeated sign-in emails are not capped per hour.
+Requests for the same address must still be at least `max_frequency` (`1s`,
+under `[auth.email]` in `supabase/config.toml`) apart. If the app ever says
+"Too many sign-in emails were requested. Wait about an hour, then try again.",
+wait for the limit to reset or restart the stack with
+`supabase stop && supabase start`.
 Magic links expire after **one hour**; an expired, already-used, or malformed
 link shows "This sign-in link is invalid or has expired" on `/login`, where you
 can request a new link.
