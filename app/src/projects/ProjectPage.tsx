@@ -56,6 +56,12 @@ export function ProjectPage() {
           <p className="text-sm text-muted-foreground">
             {formatProjectDate(project.created_at)}
           </p>
+          <Link
+            to={`/projects/${project.id}/members`}
+            className="inline-block text-sm font-medium underline underline-offset-4"
+          >
+            Members
+          </Link>
           <p className="text-sm text-muted-foreground">
             This screen is not built yet.
           </p>

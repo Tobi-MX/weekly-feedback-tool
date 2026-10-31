@@ -11,6 +11,8 @@ import { RootErrorFallback } from './components/errors/ErrorFallbacks'
 import { PublicLayout } from './components/PublicLayout'
 import { queryClient } from './lib/queryClient'
 import { QueryCacheReset } from './profile/QueryCacheReset'
+import JoinProjectPage from './projects/JoinProjectPage'
+import ProjectMembersPage from './projects/ProjectMembersPage'
 import ProjectPage from './projects/ProjectPage'
 import ProjectsPage from './projects/ProjectsPage'
 import NotFoundPage from './routes/NotFoundPage'
@@ -44,6 +46,11 @@ function AppRoutes() {
         <Route element={<AppShell />}>
           <Route path="/projects" element={<ProjectsPage />} />
           <Route path="/projects/:id" element={<ProjectPage />} />
+          <Route
+            path="/projects/:id/members"
+            element={<ProjectMembersPage />}
+          />
+          <Route path="/join/:token" element={<JoinProjectPage />} />
           <Route path="/cycles/:id/feedback" element={<FeedbackPage />} />
           <Route path="/cycles/:id/board" element={<BoardPage />} />
           <Route path="/cycles/:id/upload" element={<UploadPage />} />

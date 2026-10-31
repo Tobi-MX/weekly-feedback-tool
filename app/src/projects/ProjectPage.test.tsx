@@ -83,6 +83,9 @@ describe('ProjectPage', () => {
       screen.queryByText('This screen is not built yet.'),
     ).not.toBeInTheDocument()
     expect(screen.queryByText('Oct 30, 2026')).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('link', { name: 'Members' }),
+    ).not.toBeInTheDocument()
     expect(projectsMock.fetchProject).toHaveBeenCalledWith(id)
   })
 
@@ -103,7 +106,26 @@ describe('ProjectPage', () => {
     expect(
       screen.queryByRole('link', { name: 'Back to projects' }),
     ).not.toBeInTheDocument()
-    expect(screen.queryByText(/cycles|members|actions|history/i)).toBeNull()
+    expect(screen.getByRole('link', { name: 'Members' })).toHaveAttribute(
+      'href',
+      `/projects/${project.id}/members`,
+    )
+    expect(screen.queryByText(/cycles|actions|history/i)).toBeNull()
     expect(projectsMock.fetchProject).toHaveBeenCalledWith(project.id)
+  })
+
+  it('lets a member who is not the owner open the project and its members link', async () => {
+    // RLS returns the row to members; the page renders the same for them.
+    projectsMock.fetchProject.mockResolvedValue(project)
+
+    renderProject(`/projects/${project.id}`)
+
+    expect(
+      await screen.findByRole('heading', { name: 'Alpha Project', level: 1 }),
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('link', { name: 'Members' }))
+    expect(await screen.findByTestId('location')).toHaveTextContent(
+      `/projects/${project.id}/members`,
+    )
   })
 })
