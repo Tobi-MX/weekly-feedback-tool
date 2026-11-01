@@ -1,6 +1,7 @@
 import { vi } from 'vitest'
 import type {
   ClosedCycle,
+  CycleDetail,
   CreateCycleInput,
   CreatedCycle,
   ProjectCycles,
@@ -14,6 +15,7 @@ import { CyclesApiError } from '../cycles/cyclesErrors'
 export const cyclesMock = {
   PAST_CYCLES_LIMIT: 10,
   fetchProjectCycles: vi.fn<(projectId: string) => Promise<ProjectCycles>>(),
+  fetchCycle: vi.fn<(cycleId: string) => Promise<CycleDetail | null>>(),
   createCycle: vi.fn<(input: CreateCycleInput) => Promise<CreatedCycle>>(),
   closeCycle: vi.fn<(cycleId: string) => Promise<ClosedCycle>>(),
 
@@ -21,6 +23,7 @@ export const cyclesMock = {
     cyclesMock.fetchProjectCycles
       .mockReset()
       .mockResolvedValue({ current: null, past: [] })
+    cyclesMock.fetchCycle.mockReset().mockResolvedValue(null)
     cyclesMock.createCycle
       .mockReset()
       .mockRejectedValue(new CyclesApiError('unknown'))

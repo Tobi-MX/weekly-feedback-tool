@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useAuth } from '@/auth/AuthProvider'
 import { Button } from '@/components/ui/button'
@@ -81,6 +82,14 @@ function CurrentCycle({
           Opened {formatProjectDate(cycle.createdAt)}
         </p>
       </div>
+
+      {/* Every member, the facilitator included, gets the same link. */}
+      <Link
+        to={`/cycles/${cycle.id}/feedback`}
+        className="inline-block text-sm font-medium underline underline-offset-4"
+      >
+        {cycle.status === 'collecting' ? 'Add feedback' : 'View my feedback'}
+      </Link>
 
       {isFacilitator && !confirming ? (
         <Button

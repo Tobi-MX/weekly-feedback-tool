@@ -403,6 +403,62 @@ describe('ProjectPage cycles', () => {
   })
 })
 
+describe('ProjectPage feedback link', () => {
+  const feedbackHref = `/cycles/${openCycle.id}/feedback`
+
+  it.each<[string, ProjectMember[]]>([
+    ['the facilitator', asFacilitator],
+    ['a member', asMember],
+  ])(
+    'shows %s an Add feedback link while the cycle is collecting',
+    async (_label, members) => {
+      renderFound({ members, cycles: { current: openCycle, past: [] } })
+
+      const link = await screen.findByRole('link', { name: 'Add feedback' })
+      expect(link).toHaveAttribute('href', feedbackHref)
+      expect(
+        screen.queryByRole('link', { name: 'View my feedback' }),
+      ).not.toBeInTheDocument()
+    },
+  )
+
+  it.each<CycleStatus>(['reveal', 'cluster', 'vote', 'discuss'])(
+    'shows View my feedback while the cycle is %s',
+    async (status) => {
+      renderFound({
+        members: asMember,
+        cycles: { current: { ...openCycle, status }, past: [] },
+      })
+
+      const link = await screen.findByRole('link', {
+        name: 'View my feedback',
+      })
+      expect(link).toHaveAttribute('href', feedbackHref)
+      expect(
+        screen.queryByRole('link', { name: 'Add feedback' }),
+      ).not.toBeInTheDocument()
+    },
+  )
+
+  it('shows no feedback link with no open cycle, and none for past cycles', async () => {
+    renderFound({ cycles: { current: null, past: pastCycles } })
+
+    expect(await screen.findByText('Retro two')).toBeVisible()
+    expect(screen.getByText('No open feedback cycle.')).toBeVisible()
+    expect(
+      screen.queryByRole('link', { name: 'Add feedback' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('link', { name: 'View my feedback' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen
+        .queryAllByRole('link')
+        .some((link) => link.getAttribute('href')?.startsWith('/cycles/')),
+    ).toBe(false)
+  })
+})
+
 describe('ProjectPage create cycle form', () => {
   it('prefills the title and week from the local date and lists three weeks', async () => {
     // Wednesday 2026-10-28, local time.

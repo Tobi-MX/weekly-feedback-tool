@@ -21,7 +21,6 @@ function renderSignedIn(path: string, navigationLog?: string[]) {
 
 describe('placeholder routes', () => {
   it.each<[string, string]>([
-    ['/cycles/cycle-secret-id/feedback', 'Feedback'],
     ['/cycles/cycle-secret-id/board', 'Retrospective board'],
     ['/cycles/cycle-secret-id/upload', 'Meeting upload'],
     ['/cycles/cycle-secret-id/summary', 'Retrospective summary'],
@@ -49,6 +48,21 @@ describe('placeholder routes', () => {
       expect(profileMock.fetchProfileDisplayName).toHaveBeenCalledTimes(1)
       expect(profileMock.fetchProfileDisplayName).toHaveBeenCalledWith('user-1')
     })
+  })
+
+  it('renders /cycles/:id/feedback with the real feedback form, not a placeholder', async () => {
+    renderSignedIn('/cycles/cycle-secret-id/feedback')
+
+    expect(
+      await screen.findByText('Cycle not found or you do not have access.'),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText('This screen is not built yet.'),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('heading', { name: 'Feedback', level: 1 }),
+    ).not.toBeInTheDocument()
+    expect(locationText()).toBe('/cycles/cycle-secret-id/feedback')
   })
 
   it('renders /projects and /projects/:id with the real projects screens, not placeholders', async () => {
