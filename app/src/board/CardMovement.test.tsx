@@ -625,6 +625,132 @@ describe('optimistic moves', () => {
   })
 })
 
+describe('QA fixes', () => {
+  it('a long cluster name without spaces wraps anywhere inside its menu item', async () => {
+    const long = 'N'.repeat(100)
+    setup({ board: boardOf('cluster', [PROCESS, { ...TOOLS, name: long }]) })
+    await clusterBoard()
+    const menu = await openMenu(moveButton(U1))
+    const label = item(menu, `Move to ${long}`).querySelector(
+      '[data-move-item-label]',
+    )
+    expect(label).not.toBeNull()
+    expect(label).toHaveClass('min-w-0', 'flex-1', '[overflow-wrap:anywhere]')
+    expect(label).not.toHaveClass('break-words')
+    expect(item(menu, `Move to ${long}`)).not.toHaveClass('break-words')
+  })
+
+  it('two identical results are announced twice', async () => {
+    setup()
+    await clusterBoard()
+    boardMock.moveCard.mockResolvedValue(undefined)
+    const region = within(screen.getByTestId('cluster-board')).getByRole(
+      'status',
+    )
+    expect(region).toHaveAttribute('aria-live', 'polite')
+    expect(region).toHaveAttribute('aria-atomic', 'true')
+    let mutations = 0
+    const observer = new MutationObserver((records) => {
+      mutations += records.filter(
+        (record) => record.type === 'childList',
+      ).length
+    })
+    observer.observe(region, { childList: true, subtree: true })
+
+    boardMock.fetchCycleBoard.mockResolvedValue(
+      boardOf('cluster', [withCards(PROCESS, [P2, P3]), TOOLS]),
+    )
+    await choose(P1, 'Move to Ungrouped')
+    await waitFor(() => {
+      expect(statusText()).toBe('Moved card to Ungrouped.')
+    })
+    const first = region.firstElementChild
+    const afterFirst = mutations
+
+    boardMock.fetchCycleBoard.mockResolvedValue(
+      boardOf('cluster', [withCards(PROCESS, [P3]), TOOLS]),
+    )
+    await waitFor(() => {
+      expect(moveButton(P2)).not.toHaveAttribute('aria-disabled')
+    })
+    await choose(P2, 'Move to Ungrouped')
+    await waitFor(() => {
+      expect(region.firstElementChild).not.toBe(first)
+    })
+    observer.disconnect()
+    expect(statusText()).toBe('Moved card to Ungrouped.')
+    expect(afterFirst).toBeGreaterThan(0)
+    expect(mutations).toBeGreaterThan(afterFirst)
+    expect(boardMock.moveCard).toHaveBeenCalledTimes(2)
+  })
+
+  it('an open menu stays open when another card above it moves away', async () => {
+    setup()
+    await clusterBoard()
+    await subscribed()
+    await openMenu(moveButton(P3))
+
+    boardMock.fetchCycleBoard.mockResolvedValue(
+      boardOf('cluster', [withCards(PROCESS, [P2, P3]), TOOLS]),
+    )
+    emitEvent()
+    // The open modal menu hides the rest from the accessibility tree.
+    await waitFor(() => {
+      expect(
+        document.querySelector(
+          `[data-drop-target="ungrouped"] li[data-card-id="${P1.cardId}"]`,
+        ),
+      ).not.toBeNull()
+    })
+    expect(menuLabels(screen.getByRole('menu'))).toEqual([
+      'Move up',
+      'Move to Ungrouped',
+      'Move to Tools',
+    ])
+
+    // The card itself moving still closes it.
+    boardMock.fetchCycleBoard.mockResolvedValue(
+      boardOf('cluster', [withCards(PROCESS, [P3, P2]), TOOLS]),
+    )
+    emitEvent()
+    await waitFor(() => {
+      expect(screen.queryByRole('menu')).toBeNull()
+    })
+  })
+
+  it('a menu opened right after a move keeps focus on its first item', async () => {
+    setup()
+    await clusterBoard()
+    const pending = deferred<undefined>()
+    boardMock.moveCard.mockReturnValue(pending.promise)
+    await choose(U1, 'Move to Tools')
+    await waitFor(() => {
+      expect(textsIn(/^Tools/)).toEqual(['Start pairing'])
+    })
+    const refetch = deferred<CycleBoard | null>()
+    boardMock.fetchCycleBoard.mockReturnValue(refetch.promise)
+    await act(async () => {
+      pending.resolve(undefined)
+      await pending.promise
+    })
+    await act(async () => {
+      refetch.resolve(boardOf('cluster', [PROCESS, withCards(TOOLS, [U1])]))
+      await refetch.promise
+    })
+    await waitFor(() => {
+      expect(moveButton(U2)).not.toHaveAttribute('aria-disabled')
+    })
+    const menu = await openMenu(moveButton(U2))
+    await waitFor(() => {
+      expect(item(menu, 'Move to Process')).toHaveFocus()
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    })
+    expect(item(menu, 'Move to Process')).toHaveFocus()
+  })
+})
+
 describe('live changes around a move', () => {
   it('an open menu follows renames and deletes, and closes when its card moves elsewhere', async () => {
     setup()

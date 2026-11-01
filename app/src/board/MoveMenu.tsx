@@ -1,5 +1,4 @@
 import { useSyncExternalStore } from 'react'
-import { wrapText } from '@/cards/CardForms'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -89,12 +88,18 @@ export function MoveMenu({
         {items.map((item) => (
           <DropdownMenuItem
             key={item.key}
-            className={wrapText}
             onSelect={() => {
               onSelect(item)
             }}
           >
-            {item.label}
+            {/* A flex child that may shrink, and a 100-character name with
+                no spaces wraps anywhere instead of overflowing. */}
+            <span
+              data-move-item-label=""
+              className="min-w-0 flex-1 [overflow-wrap:anywhere] whitespace-normal"
+            >
+              {item.label}
+            </span>
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>

@@ -18,13 +18,16 @@ import { ungroupedCards } from './boardModel'
 import {
   applyPendingMove,
   CARD_DRAG_TYPE,
+  cardAnchor,
   cardLocation,
+  cardMovedItself,
   dropPosition,
   isNoOpMove,
   locationKey,
   moveAnnouncement,
   moveButtonLabel,
   moveMenuItems,
+  type CardAnchor,
   type CardMove,
   type MoveMenuItem,
 } from './cardMove'
@@ -141,7 +144,7 @@ interface MoveFocus {
 /** The open Move menu, and where its card was when it opened. */
 interface OpenMenu {
   readonly cardId: string
-  readonly at: string
+  readonly anchor: CardAnchor
 }
 
 /** An ongoing drag over the board. */
@@ -155,6 +158,14 @@ interface DragState {
 }
 
 const UNGROUPED_TARGET = 'ungrouped'
+
+function sameAnchor(a: CardAnchor, b: CardAnchor): boolean {
+  return (
+    a.group === b.group &&
+    a.before.join() === b.before.join() &&
+    a.after.join() === b.after.join()
+  )
+}
 
 function carriesCard(event: DragEvent): boolean {
   return Array.from(event.dataTransfer.types).includes(CARD_DRAG_TYPE)
@@ -424,7 +435,12 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
   const [newDraft, setNewDraft] = useState('')
   const [newError, setNewError] = useState<string | null>(null)
   const [openForm, setOpenForm] = useState<OpenForm | null>(null)
-  const [announcement, setAnnouncement] = useState('')
+  // Each announcement gets a new id, which remounts the live region's text,
+  // so a repeated identical message (two moves to Ungrouped) is read again.
+  const [announcement, setAnnouncementState] = useState({ text: '', id: 0 })
+  const setAnnouncement = (text: string) => {
+    setAnnouncementState((current) => ({ text, id: current.id + 1 }))
+  }
   // A new object for every request, so the same target can be asked twice.
   const [focusTarget, setFocusTarget] = useState<FocusTarget | null>(null)
 
@@ -454,11 +470,20 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
 
   // Another member moved the card whose menu is open: close the menu, send
   // nothing, and focus the card's Move button in its new place.
+  // Another card moving above or below it changes nothing.
   if (openMenu !== null) {
-    const at = locationKey(cardLocation(displayed, openMenu.cardId))
-    if (at !== openMenu.at) {
+    const anchor = cardAnchor(displayed, openMenu.cardId)
+    if (cardMovedItself(openMenu.anchor, anchor)) {
       setOpenMenu(null)
-      setMoveFocus({ cardId: openMenu.cardId, at })
+      setMoveFocus({
+        cardId: openMenu.cardId,
+        at: locationKey(cardLocation(displayed, openMenu.cardId)),
+      })
+    } else if (
+      anchor !== openMenu.anchor &&
+      !sameAnchor(anchor, openMenu.anchor)
+    ) {
+      setOpenMenu({ ...openMenu, anchor })
     }
   }
 
@@ -633,11 +658,16 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
               open={openMenu?.cardId === card.cardId}
               blocked={mover.isPending}
               onOpenChange={(open) => {
+                if (open) {
+                  // A focus request left over from a move must not pull focus
+                  // out of the menu that is opening.
+                  handledMoveFocusRef.current = moveFocus
+                }
                 setOpenMenu(
                   open
                     ? {
                         cardId: card.cardId,
-                        at: locationKey(cardLocation(displayed, card.cardId)),
+                        anchor: cardAnchor(displayed, card.cardId),
                       }
                     : null,
                 )
@@ -827,8 +857,13 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
         {newError ? <InlineError id={newErrorId} text={newError} /> : null}
       </form>
 
-      <p role="status" className="sr-only">
-        {announcement}
+      <p
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+      >
+        <span key={announcement.id}>{announcement.text}</span>
       </p>
 
       <section

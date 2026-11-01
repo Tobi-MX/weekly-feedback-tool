@@ -215,3 +215,48 @@ export function dropPosition(
   }
   return insertionIndex
 }
+
+/**
+ * Where a card sits relative to the cards around it: its group (a cluster id,
+ * "ungrouped", or "gone") and, in a cluster, the cards before and after it.
+ */
+export interface CardAnchor {
+  readonly group: string
+  readonly before: readonly string[]
+  readonly after: readonly string[]
+}
+
+export function cardAnchor(board: CycleBoard, cardId: string): CardAnchor {
+  const location = cardLocation(board, cardId)
+  if (location === null) {
+    return { group: 'gone', before: [], after: [] }
+  }
+  if (location.clusterId === null) {
+    return { group: 'ungrouped', before: [], after: [] }
+  }
+  const ids =
+    board.clusters.find((cluster) => cluster.clusterId === location.clusterId)
+      ?.cardIds ?? []
+  return {
+    group: location.clusterId,
+    before: ids.slice(0, location.index),
+    after: ids.slice(location.index + 1),
+  }
+}
+
+/**
+ * Whether the card itself moved between two boards: it changed group, or
+ * some card that stayed in its cluster is now on the other side of it. Other
+ * cards leaving or joining the cluster do not count.
+ */
+export function cardMovedItself(was: CardAnchor, now: CardAnchor): boolean {
+  if (was.group !== now.group) {
+    return true
+  }
+  const wasBefore = new Set(was.before)
+  const wasAfter = new Set(was.after)
+  return (
+    now.before.some((id) => wasAfter.has(id)) ||
+    now.after.some((id) => wasBefore.has(id))
+  )
+}
