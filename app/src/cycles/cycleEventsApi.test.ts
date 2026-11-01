@@ -52,8 +52,8 @@ function createRealtimeMock() {
     return fake
   })
 
-  const removeChannel = vi.fn(
-    (_channel: FakeChannel) =>
+  const removeChannel = vi.fn<(channel: FakeChannel) => Promise<'ok'>>(
+    () =>
       new Promise<'ok'>((resolve) => {
         pendingRemovals.push(() => {
           resolve('ok')
