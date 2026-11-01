@@ -4,6 +4,11 @@ import { isProjectId } from '@/projects/projectId'
 import { CYCLE_STATUSES, type CycleStatus } from './cycleStatus'
 import { CyclesApiError, toCyclesErrorCode } from './cyclesErrors'
 
+// The Realtime subscription lives in cycleEventsApi.ts. It is re-exported here
+// so the shared cycles mock replaces it in every unit test as well.
+export { subscribeToCycleEvents } from './cycleEventsApi'
+export type { CycleEventsHandlers, CycleEventsStatus } from './cycleEventsApi'
+
 /** A cycle as the project page renders it. */
 export interface CycleSummary {
   readonly id: string
@@ -51,6 +56,13 @@ export interface ClosedCycle {
   readonly id: string
   readonly status: CycleStatus
   readonly closedAt: string | null
+}
+
+/** The `start_retrospective` result row. */
+export interface StartedRetrospective {
+  readonly id: string
+  readonly status: CycleStatus
+  readonly revealedAt: string | null
 }
 
 /**
@@ -109,6 +121,13 @@ const closedRowSchema = z.object({
   closed_at: z.string().nullable(),
 })
 
+// Narrow: unknown keys are dropped.
+const startedRowSchema = z.object({
+  id: z.string(),
+  status: statusSchema,
+  revealed_at: z.string().nullable(),
+})
+
 const countSchema = z.number().int().nonnegative()
 
 // Narrow: unknown keys (for example an author id) are dropped.
@@ -152,7 +171,8 @@ function toSummary(row: z.infer<typeof cycleRowSchema>): CycleSummary {
 
 /** Calls an RPC and keeps only the stable error code on failure. */
 async function callRpc(
-  name: 'create_cycle' | 'close_cycle' | 'get_cycle_status',
+  name:
+    'create_cycle' | 'close_cycle' | 'start_retrospective' | 'get_cycle_status',
   args: Record<string, unknown>,
 ): Promise<unknown> {
   if (!supabase) {
@@ -279,6 +299,21 @@ export async function closeCycle(cycleId: string): Promise<ClosedCycle> {
     throw new CyclesApiError('unknown')
   }
   return { id: row.id, status: row.status, closedAt: row.closed_at }
+}
+
+/**
+ * Facilitator only: moves the cycle from collecting to reveal and sets
+ * `revealed_at`. Starting a cycle already in reveal is a successful no-op.
+ */
+export async function startRetrospective(
+  cycleId: string,
+): Promise<StartedRetrospective> {
+  const data = await callRpc('start_retrospective', { p_cycle_id: cycleId })
+  const [row] = parseRows(startedRowSchema, data)
+  if (!row) {
+    throw new CyclesApiError('unknown')
+  }
+  return { id: row.id, status: row.status, revealedAt: row.revealed_at }
 }
 
 /**
