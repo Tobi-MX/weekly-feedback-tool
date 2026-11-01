@@ -20,8 +20,14 @@ import {
 import { AdvanceControl } from './AdvanceControl'
 import type { CycleBoard } from './boardApi'
 import { boardErrorCodeOf } from './boardErrors'
-import { isBoardStage, isConsistentBoard, stageName } from './boardModel'
+import {
+  isBoardStage,
+  isConsistentBoard,
+  stageName,
+  votingSummary,
+} from './boardModel'
 import { BoardCardList } from './BoardCards'
+import { CLUSTER_INTRO, ClusterMode } from './ClusterMode'
 import { StageIndicator } from './StageIndicator'
 import {
   BOARD_POLL_INTERVAL_MS,
@@ -117,6 +123,7 @@ interface ModeProps {
   readonly onAdvanceStart: (target: CycleStatus) => void
   readonly onAdvanced: (target: CycleStatus) => void
   readonly onAdvanceFailed: (code: CyclesErrorCode) => void
+  readonly onLostAccess: () => void
 }
 
 const ADVANCE_TARGET: Record<AdvanceFromStatus, CycleStatus> = {
@@ -132,6 +139,7 @@ function BoardMode({
   onAdvanceStart,
   onAdvanced,
   onAdvanceFailed,
+  onLostAccess,
 }: ModeProps) {
   const { status, isRevealed, cards } = board
   let heading: string
@@ -166,7 +174,7 @@ function BoardMode({
       break
     case 'cluster':
       heading = 'Cluster'
-      placeholder = 'Grouping cards into clusters is not available yet.'
+      intro = <p className="text-sm">{CLUSTER_INTRO}</p>
       from = 'cluster'
       break
     case 'vote':
@@ -208,6 +216,7 @@ function BoardMode({
           key={from}
           cycleId={board.cycleId}
           from={from}
+          note={from === 'cluster' ? votingSummary(board) : undefined}
           onStart={() => {
             onAdvanceStart(ADVANCE_TARGET[from])
           }}
@@ -218,7 +227,11 @@ function BoardMode({
         />
       ) : null}
       {/* Cards are shown only once revealed, never the caller's own before. */}
-      {isRevealed ? <BoardCardList cards={cards} /> : null}
+      {status === 'cluster' ? (
+        <ClusterMode board={board} onLostAccess={onLostAccess} />
+      ) : isRevealed ? (
+        <BoardCardList cards={cards} />
+      ) : null}
     </section>
   )
 }
@@ -382,6 +395,10 @@ function BoardScreen({ cycleId }: { cycleId: string }) {
     [refetchMembers],
   )
 
+  const loseAccess = useCallback(() => {
+    setLostAccess(true)
+  }, [])
+
   const retry = () => {
     if (cycleQuery.isError) {
       void cycleQuery.refetch()
@@ -438,6 +455,7 @@ function BoardScreen({ cycleId }: { cycleId: string }) {
           onAdvanceStart={onAdvanceStart}
           onAdvanced={onAdvanced}
           onAdvanceFailed={onAdvanceFailed}
+          onLostAccess={loseAccess}
         />
       </>
     )

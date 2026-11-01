@@ -34,12 +34,21 @@ interface AnonymousBoardCard {
 
 type BoardCard = AttributedBoardCard | AnonymousBoardCard
 
-/** The `get_cycle_board` response: exactly four keys in Task 15. */
+/** One cluster on the board (#17): exactly four keys. */
+interface BoardCluster {
+  readonly cluster_id: string
+  readonly name: string
+  readonly source: 'manual' | 'ai'
+  readonly card_ids: readonly string[]
+}
+
+/** The `get_cycle_board` response: exactly five keys since Task 17. */
 interface CycleBoard {
   readonly cycle_id: string
   readonly status: string
   readonly is_revealed: boolean
   readonly cards: readonly BoardCard[]
+  readonly clusters: readonly BoardCluster[]
 }
 
 /** One row of `get_cycle_status` (only the columns this file reads). */
@@ -77,7 +86,7 @@ interface ClosedCycleRow {
 /** Who made a call: a signed-in test user or the signed-out anon client. */
 type Caller = TestUser | 'anon'
 
-const BOARD_KEYS = ['cards', 'cycle_id', 'is_revealed', 'status']
+const BOARD_KEYS = ['cards', 'clusters', 'cycle_id', 'is_revealed', 'status']
 const ATTRIBUTED_KEYS = [
   'author_display_name',
   'card_id',

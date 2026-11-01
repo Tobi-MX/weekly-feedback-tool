@@ -41,6 +41,7 @@ async function renderSignedIn(
       status: 'collecting',
       isRevealed: false,
       cards: [],
+      clusters: [],
     })
   }
   renderApp({ initialEntries: [path] })

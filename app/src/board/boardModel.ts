@@ -54,3 +54,31 @@ export function boardCardLabel(card: BoardCard): string {
     ? `${card.authorDisplayName} (you)`
     : card.authorDisplayName
 }
+
+/**
+ * The cards in no cluster, in the response's order: a filter, never a sort.
+ */
+export function ungroupedCards(board: CycleBoard): readonly BoardCard[] {
+  const clustered = new Set(
+    board.clusters.flatMap((cluster) => cluster.cardIds),
+  )
+  return board.cards.filter((card) => !clustered.has(card.cardId))
+}
+
+/**
+ * The cluster and ungrouped-card counts the "Start voting" confirmation shows
+ * before its own copy.
+ */
+export function votingSummary(board: CycleBoard): string {
+  const clusterCount = board.clusters.length
+  if (clusterCount === 0) {
+    return 'There are no clusters yet, so there is nothing to vote on.'
+  }
+  const ungroupedCount = ungroupedCards(board).length
+  const clusters = clusterCount === 1 ? '1 cluster' : `${clusterCount} clusters`
+  const cards =
+    ungroupedCount === 1
+      ? '1 ungrouped card'
+      : `${ungroupedCount} ungrouped cards`
+  return `There ${clusterCount === 1 ? 'is' : 'are'} ${clusters} and ${cards}. Ungrouped cards cannot receive votes.`
+}
