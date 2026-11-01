@@ -49,11 +49,27 @@ const deletedAuthorCard = {
   author_display_name: null,
 }
 
+// Ids out of alphabetical order: the parse keeps the server's order.
+const processCluster = {
+  cluster_id: 'f1000000-0000-4000-8000-000000000001',
+  name: 'Process',
+  source: 'manual',
+  card_ids: [deletedAuthorCard.card_id, anonymousCard.card_id],
+}
+
+const emptyAiCluster = {
+  cluster_id: 'a1000000-0000-4000-8000-000000000002',
+  name: 'Tools',
+  source: 'ai',
+  card_ids: [],
+}
+
 const board = {
   cycle_id: CYCLE_ID,
   status: 'reveal',
   is_revealed: true,
   cards: [attributedCard, anonymousCard, deletedAuthorCard],
+  clusters: [processCluster, emptyAiCluster],
 }
 
 function createClientMock(result: DbResult) {
@@ -132,12 +148,32 @@ describe('fetchCycleBoard', () => {
           authorDisplayName: null,
         },
       ],
+      clusters: [
+        {
+          clusterId: processCluster.cluster_id,
+          name: 'Process',
+          source: 'manual',
+          cardIds: [deletedAuthorCard.card_id, anonymousCard.card_id],
+        },
+        {
+          clusterId: emptyAiCluster.cluster_id,
+          name: 'Tools',
+          source: 'ai',
+          cardIds: [],
+        },
+      ],
     })
   })
 
   it('parses an empty board', async () => {
     createClientMock({
-      data: { ...board, status: 'collecting', is_revealed: false, cards: [] },
+      data: {
+        ...board,
+        status: 'collecting',
+        is_revealed: false,
+        cards: [],
+        clusters: [],
+      },
       error: null,
     })
 
@@ -146,6 +182,7 @@ describe('fetchCycleBoard', () => {
       status: 'collecting',
       isRevealed: false,
       cards: [],
+      clusters: [],
     })
   })
 
@@ -192,6 +229,82 @@ describe('fetchCycleBoard', () => {
       { ...board, cards: [{ ...anonymousCard, category: 'later' }] },
     ],
     ['null data', null],
+    [
+      'a missing clusters key',
+      {
+        cycle_id: CYCLE_ID,
+        status: 'reveal',
+        is_revealed: true,
+        cards: board.cards,
+      },
+    ],
+    ['clusters: null', { ...board, clusters: null }],
+    [
+      'a cluster with sort_order',
+      { ...board, clusters: [{ ...processCluster, sort_order: 1 }] },
+    ],
+    [
+      'a cluster with created_at',
+      {
+        ...board,
+        clusters: [{ ...processCluster, created_at: '2026-11-01T09:00:00Z' }],
+      },
+    ],
+    [
+      'a cluster without card_ids',
+      {
+        ...board,
+        clusters: [
+          {
+            cluster_id: processCluster.cluster_id,
+            name: 'Process',
+            source: 'manual',
+          },
+        ],
+      },
+    ],
+    [
+      'an unknown cluster source',
+      { ...board, clusters: [{ ...processCluster, source: 'robot' }] },
+    ],
+    [
+      'a card_ids entry that is not a UUID',
+      { ...board, clusters: [{ ...processCluster, card_ids: ['card-1'] }] },
+    ],
+    [
+      'a card_ids entry that is not in cards',
+      {
+        ...board,
+        clusters: [
+          {
+            ...processCluster,
+            card_ids: ['b9000000-0000-4000-8000-000000000009'],
+          },
+        ],
+      },
+    ],
+    [
+      'a card id in two clusters',
+      {
+        ...board,
+        clusters: [
+          processCluster,
+          { ...emptyAiCluster, card_ids: [anonymousCard.card_id] },
+        ],
+      },
+    ],
+    [
+      'a card id twice in one cluster',
+      {
+        ...board,
+        clusters: [
+          {
+            ...processCluster,
+            card_ids: [anonymousCard.card_id, anonymousCard.card_id],
+          },
+        ],
+      },
+    ],
   ])('fails to parse %s', async (_label, data) => {
     createClientMock({ data, error: null })
 

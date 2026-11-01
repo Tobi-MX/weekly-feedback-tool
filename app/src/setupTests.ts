@@ -60,6 +60,12 @@ vi.mock('./board/boardApi', async () => {
   return mock
 })
 
+// The three cluster RPCs share the board's mock controller.
+vi.mock('./board/clustersApi', async () => {
+  const { boardMock: mock } = await import('./test/boardMock')
+  return mock
+})
+
 // jsdom lacks a few browser APIs that Radix and sonner feature-detect.
 if (typeof globalThis.ResizeObserver === 'undefined') {
   globalThis.ResizeObserver = class ResizeObserver {
