@@ -6,7 +6,8 @@ import { ClustersApiError } from '../board/clusterErrors'
 /**
  * Shared mock for `src/board/boardApi.ts` and `src/board/clustersApi.ts`.
  * Every test gets it through `setupTests`, so no test opens a network
- * connection for board data, cluster writes, or card moves. By default the board resolves
+ * connection for board data, cluster writes (merge and split included), or
+ * card moves. By default the board resolves
  * `null` (not found), like `fetchCycle`, and every cluster write fails with
  * `unknown` until a test configures it.
  */
@@ -17,6 +18,18 @@ export const boardMock = {
   renameCluster:
     vi.fn<(clusterId: string, name: string) => Promise<SavedCluster>>(),
   deleteCluster: vi.fn<(clusterId: string) => Promise<void>>(),
+  mergeClusters:
+    vi.fn<
+      (sourceClusterId: string, targetClusterId: string) => Promise<SavedCluster>
+    >(),
+  splitCluster:
+    vi.fn<
+      (
+        clusterId: string,
+        cardIds: readonly string[],
+        name: string,
+      ) => Promise<SavedCluster>
+    >(),
   moveCard:
     vi.fn<
       (
@@ -35,6 +48,12 @@ export const boardMock = {
       .mockReset()
       .mockRejectedValue(new ClustersApiError('unknown'))
     boardMock.deleteCluster
+      .mockReset()
+      .mockRejectedValue(new ClustersApiError('unknown'))
+    boardMock.mergeClusters
+      .mockReset()
+      .mockRejectedValue(new ClustersApiError('unknown'))
+    boardMock.splitCluster
       .mockReset()
       .mockRejectedValue(new ClustersApiError('unknown'))
     boardMock.moveCard
