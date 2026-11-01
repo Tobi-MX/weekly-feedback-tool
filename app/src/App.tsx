@@ -4,6 +4,7 @@ import { Toaster } from 'sonner'
 import { AuthProvider, useAuth } from './auth/AuthProvider'
 import AuthCallbackPage from './auth/AuthCallbackPage'
 import { AuthLoadingScreen } from './auth/AuthLoading'
+import FeedbackPage from './cards/FeedbackPage'
 import LoginPage from './auth/LoginPage'
 import { AppShell } from './components/AppShell'
 import { AppErrorBoundary } from './components/errors/AppErrorBoundary'
@@ -16,12 +17,7 @@ import ProjectMembersPage from './projects/ProjectMembersPage'
 import ProjectPage from './projects/ProjectPage'
 import ProjectsPage from './projects/ProjectsPage'
 import NotFoundPage from './routes/NotFoundPage'
-import {
-  BoardPage,
-  FeedbackPage,
-  SummaryPage,
-  UploadPage,
-} from './routes/Placeholders'
+import { BoardPage, SummaryPage, UploadPage } from './routes/Placeholders'
 import ProtectedRoute from './routes/ProtectedRoute'
 
 /**
