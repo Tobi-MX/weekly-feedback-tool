@@ -139,6 +139,8 @@ Audio/video transcription is delegated to a managed speech-to-text API. Running 
 
 **Pre-reveal visibility**
 
+- The reveal happens only through `start_retrospective`, which only the project's current facilitator may call (owning the project gives no right). It moves the open cycle from `collecting` to `reveal` and sets `feedback_cycles.revealed_at` in one update; no card row is copied, changed, or deleted, and no privilege on `cards` or `card_authors` changes.
+- "Revealed" means `revealed_at is not null`. A CHECK requires it in `reveal`, `cluster`, `vote`, and `discuss`, and a guard trigger lets it change only once, from null, together with `collecting → reveal`. It is never cleared or moved, and a cycle closed early from `collecting` keeps it null for good.
 - Before the retrospective is started, a member receives only their own cards.
 - The facilitator also cannot read other members' card content before reveal.
 - Project-page "submission status" exposes aggregate counts only, the same for every member including the facilitator; never who submitted, per-member counts, times, or card content; no card total before reveal. It comes from `get_cycle_status`, where "revealed" means `revealed_at is not null` (a cycle closed early from `collecting` is never revealed). The counts are not live: card writes broadcast nothing.
@@ -209,7 +211,7 @@ Names are indicative; exact columns will be finalized with migrations.
 | `cluster_cards` | Cluster membership and ordering; absence means ungrouped |
 | `votes` | Cycle, cluster, voter; up to 3 per voter, stackable |
 | `notes` | Cycle, optional cluster, author, text, timestamps |
-| `cycle_events` | Stage transitions and broadcast events for Realtime |
+| `cycle_events` | Broadcast events for Realtime: `id`, `cycle_id`, `type` (`stage_changed` for now), `from_status`, `to_status`, `actor_id` (the user who changed the stage, or null), `payload` (`{}`), `created_at`. One row per status change, written only by a trigger on `feedback_cycles`; members of the cycle's project read it, nobody writes or updates it. It never holds card text, card ids, card or submission counts, author ids, per-member data, or vote data |
 
 **Cycle statuses:** `collecting` → `reveal` → `cluster` → `vote` → `discuss` → `closed`.
 
@@ -261,7 +263,7 @@ All RPCs validate the caller's membership and the current cycle stage.
 | RPC | Purpose |
 |---|---|
 | `create_cycle` / `close_cycle` | Cycle lifecycle |
-| `start_retrospective` | Collecting → reveal; reveals all cards at once |
+| `start_retrospective` | collecting → reveal; sets `revealed_at`; facilitator only. Repeating it on a `reveal` cycle is a no-op; any other stage gets `cycle_not_collecting` |
 | `advance_stage` | Reveal → cluster → vote → discuss → closed |
 | `close_voting` | Ends voting and makes totals visible |
 | `set_discussion_status` | Mark cluster discussed / skipped / deferred |
@@ -336,8 +338,9 @@ Rules:
 
 ## 8. Realtime
 
-- **Enabled:** `feedback_cycles` (stage), `clusters`, `cluster_cards`, `cycle_events`.
-- **Not enabled:** `cards`, `card_authors`, `votes`, `transcripts`, `extracted_items` drafts. No client role can read `cards` directly, so card changes reach other sessions through `cycle_events` (#14, #16) rather than through Realtime on `cards`.
+- **Enabled:** `cycle_events` only, for now. Realtime applies its member-only select policy to each subscriber, and clients listen to `INSERT` only. `clusters` and `cluster_cards` are planned for #17–#19.
+- **Not enabled:** `feedback_cycles`, `cards`, `card_authors`, `votes`, `transcripts`, `extracted_items` drafts. Stage changes arrive through `cycle_events` (one `stage_changed` row per status change), not through Realtime on `feedback_cycles`. No client role can read `cards` directly, so card changes reach other sessions through `cycle_events` (#14, #16) rather than through Realtime on `cards`.
+- A client that receives an event reads nothing from it and re-reads through the RPCs. It also re-reads every time its channel reports `SUBSCRIBED`, so an event missed while disconnected is caught up.
 - Clients use TanStack Query with optimistic updates; Realtime events invalidate the relevant queries.
 - A polling fallback (3–5 seconds) is acceptable if Realtime proves unreliable. Realtime is not a hard MVP dependency.
 
