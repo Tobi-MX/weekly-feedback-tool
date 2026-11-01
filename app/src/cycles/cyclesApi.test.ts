@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CyclesApiError,
+  advanceStageErrorMessage,
   closeCycleErrorMessage,
   createCycleErrorMessage,
   startRetrospectiveErrorMessage,
@@ -23,6 +24,7 @@ const {
   closeCycle,
   fetchCycleStatus,
   startRetrospective,
+  advanceStage,
 } = await vi.importActual<typeof import('./cyclesApi')>('./cyclesApi')
 
 interface DbResult {
@@ -665,6 +667,106 @@ describe('startRetrospective', () => {
       expect(startRetrospectiveErrorMessage(code)).toBe(
         'Could not start the retrospective.',
       )
+    }
+  })
+})
+
+describe('advanceStage', () => {
+  it.each([
+    ['reveal', 'cluster'],
+    ['cluster', 'vote'],
+  ] as const)(
+    'calls only advance_stage with exactly the cycle id and %s',
+    async (fromStatus, target) => {
+      const fake = createClientMock([])
+      fake.rpc.mockResolvedValue({
+        data: [{ id: CYCLE_ID, status: target }],
+        error: null,
+      })
+
+      await expect(advanceStage(CYCLE_ID, fromStatus)).resolves.toStrictEqual({
+        id: CYCLE_ID,
+        status: target,
+      })
+      expect(fake.rpc).toHaveBeenCalledTimes(1)
+      const [name, args] = fake.rpc.mock.calls[0] ?? []
+      expect(name).toBe('advance_stage')
+      expect(args).toStrictEqual({
+        p_cycle_id: CYCLE_ID,
+        p_from_status: fromStatus,
+      })
+      expect(fake.from).not.toHaveBeenCalled()
+    },
+  )
+
+  it('drops an extra field', async () => {
+    const fake = createClientMock([])
+    fake.rpc.mockResolvedValue({
+      data: [{ id: CYCLE_ID, status: 'cluster', revealed_at: 'x' }],
+      error: null,
+    })
+
+    const result = await advanceStage(CYCLE_ID, 'reveal')
+    expect(Object.keys(result).sort()).toEqual(['id', 'status'])
+  })
+
+  it.each([
+    ['no row', []],
+    ['a row with an unknown status', [{ id: CYCLE_ID, status: 'open' }]],
+    ['a row without status', [{ id: CYCLE_ID }]],
+  ])('treats %s as an unknown failure', async (_label, data) => {
+    const fake = createClientMock([])
+    fake.rpc.mockResolvedValue({ data, error: null })
+
+    const error = await captureError(advanceStage(CYCLE_ID, 'reveal'))
+    expect(error).toBeInstanceOf(CyclesApiError)
+    expect((error as CyclesApiError).code).toBe('unknown')
+  })
+
+  it.each<[string, string, CyclesErrorCode]>([
+    ['42501', 'not_project_member', 'not_project_member'],
+    ['42501', 'not_project_facilitator', 'not_project_facilitator'],
+    ['P0001', 'invalid_stage_transition', 'invalid_stage_transition'],
+    ['P0001', 'stage_out_of_date', 'stage_out_of_date'],
+    ['42501', 'permission denied for function advance_stage', 'unknown'],
+    ['P0001', 'stage_out_of_date: vote', 'unknown'],
+    ['PGRST202', 'Could not find the function', 'unknown'],
+  ])(
+    '%s %s becomes %s without keeping or logging the raw text',
+    async (pgCode, message, code) => {
+      const fake = createClientMock([])
+      fake.rpc.mockResolvedValue({
+        data: null,
+        error: { code: pgCode, message },
+      })
+
+      const error = await captureError(advanceStage(CYCLE_ID, 'cluster'))
+      expect(error).toBeInstanceOf(CyclesApiError)
+      expect((error as CyclesApiError).code).toBe(code)
+      expect((error as CyclesApiError).message).toBe(code)
+      expect(console.error).not.toHaveBeenCalled()
+      expect(console.warn).not.toHaveBeenCalled()
+      expect(console.log).not.toHaveBeenCalled()
+    },
+  )
+
+  it('rejects when Supabase is not configured', async () => {
+    const error = await captureError(advanceStage(CYCLE_ID, 'reveal'))
+    expect((error as CyclesApiError).code).toBe('unknown')
+  })
+
+  it('maps each code to a fixed message', () => {
+    expect(advanceStageErrorMessage('not_project_facilitator')).toBe(
+      'Only the facilitator can change the stage.',
+    )
+    expect(advanceStageErrorMessage('stage_out_of_date')).toBe(
+      'The stage has already changed.',
+    )
+    expect(advanceStageErrorMessage('invalid_stage_transition')).toBe(
+      'This stage cannot be changed from the board.',
+    )
+    for (const code of ['not_project_member', 'unknown'] as const) {
+      expect(advanceStageErrorMessage(code)).toBe('Could not change the stage.')
     }
   })
 })
