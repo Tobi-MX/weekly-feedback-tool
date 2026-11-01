@@ -21,7 +21,6 @@ function renderSignedIn(path: string, navigationLog?: string[]) {
 
 describe('placeholder routes', () => {
   it.each<[string, string]>([
-    ['/cycles/cycle-secret-id/board', 'Retrospective board'],
     ['/cycles/cycle-secret-id/upload', 'Meeting upload'],
     ['/cycles/cycle-secret-id/summary', 'Retrospective summary'],
   ])('renders the %s placeholder inside the shell', async (path, heading) => {
@@ -63,6 +62,21 @@ describe('placeholder routes', () => {
       screen.queryByRole('heading', { name: 'Feedback', level: 1 }),
     ).not.toBeInTheDocument()
     expect(locationText()).toBe('/cycles/cycle-secret-id/feedback')
+  })
+
+  it('renders /cycles/:id/board with the real board, not a placeholder', async () => {
+    renderSignedIn('/cycles/cycle-secret-id/board')
+
+    expect(
+      await screen.findByText('Cycle not found or you do not have access.'),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText('This screen is not built yet.'),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('heading', { name: 'Retrospective board' }),
+    ).not.toBeInTheDocument()
+    expect(locationText()).toBe('/cycles/cycle-secret-id/board')
   })
 
   it('renders /projects and /projects/:id with the real projects screens, not placeholders', async () => {
@@ -176,7 +190,7 @@ describe('deep links', () => {
     renderSignedIn('/cycles/abc/board?mode=vote', navigationLog)
 
     expect(
-      await screen.findByRole('heading', { name: 'Retrospective board' }),
+      await screen.findByText('Cycle not found or you do not have access.'),
     ).toBeInTheDocument()
     expect(locationText()).toBe('/cycles/abc/board?mode=vote')
     expect(navigationLog).not.toContain('/login')
@@ -211,7 +225,7 @@ describe('deep links', () => {
     })
 
     expect(
-      await screen.findByRole('heading', { name: 'Retrospective board' }),
+      await screen.findByText('Cycle not found or you do not have access.'),
     ).toBeInTheDocument()
     expect(locationText()).toBe('/cycles/abc/board?mode=vote')
     expect(
