@@ -19,6 +19,25 @@ function BoardCardItem({ card }: { card: BoardCard }) {
 }
 
 /**
+ * One card on the Cluster board: its category, text, and label, all as text.
+ * An anonymous card's DOM is the same for every viewer, inside a cluster or
+ * not.
+ */
+export function ClusterCardItem({ card }: { card: BoardCard }) {
+  return (
+    <li className="min-w-0 space-y-1 rounded-md border p-3">
+      <p className="text-xs font-medium text-muted-foreground">
+        {cardCategoryLabel(card.category)}
+      </p>
+      <p className={`text-sm ${wrapText}`}>{card.text}</p>
+      <p className={`text-xs text-muted-foreground ${wrapText}`}>
+        {boardCardLabel(card)}
+      </p>
+    </li>
+  )
+}
+
+/**
  * The read-only card list in Start, Stop, Continue order. Each section takes
  * the response's cards of its category in the response's order: a filter,
  * never a sort.

@@ -23,7 +23,7 @@ const COPY: Record<AdvanceFromStatus, ControlCopy> = {
       'Move everyone to the Cluster stage? You cannot go back to Reveal.',
     success: 'The board moved to Cluster.',
   },
-  // #17 adds its cluster and ungrouped-card counts to this confirmation.
+  // #17: the board passes its cluster and ungrouped-card counts as `note`.
   cluster: {
     action: 'Start voting',
     confirm:
@@ -38,6 +38,8 @@ export interface AdvanceControlProps {
   readonly cycleId: string
   /** The stage currently shown, which is the one the call leaves. */
   readonly from: AdvanceFromStatus
+  /** Shown before the confirmation's own copy (the counts for "Start voting"). */
+  readonly note?: string
   /** Called when the request is sent, before any answer or refetch. */
   readonly onStart: () => void
   /**
@@ -58,6 +60,7 @@ export interface AdvanceControlProps {
 export function AdvanceControl({
   cycleId,
   from,
+  note,
   onStart,
   onAdvanced,
   onFailed,
@@ -141,6 +144,9 @@ export function AdvanceControl({
         }
       }}
     >
+      {note !== undefined ? (
+        <p className={cn('text-sm', wrapText)}>{note}</p>
+      ) : null}
       <p className={cn('text-sm', wrapText)}>{copy.confirm}</p>
       <div className="flex flex-wrap gap-2">
         <Button

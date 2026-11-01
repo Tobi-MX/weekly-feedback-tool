@@ -107,7 +107,7 @@ function boardOf(
   isRevealed = status !== 'collecting',
   cards: readonly BoardCard[] = SIX_CARDS,
 ): CycleBoard {
-  return { cycleId: CYCLE_ID, status, isRevealed, cards }
+  return { cycleId: CYCLE_ID, status, isRevealed, cards, clusters: [] }
 }
 
 function memberRow(overrides: Partial<ProjectMember>): ProjectMember {
@@ -227,7 +227,7 @@ describe('board modes', () => {
       'cluster',
       true,
       'Cluster',
-      'Grouping cards into clusters is not available yet.',
+      'Group related cards into clusters. Everyone in the project can add, rename and delete clusters until voting starts.',
       'Start voting',
     ],
     ['vote', true, 'Vote', 'Voting is not available yet.', null],
@@ -292,7 +292,10 @@ describe('board modes', () => {
         expect(
           await screen.findByRole('button', { name: control }),
         ).toBeInTheDocument()
-        expect(within(main).getAllByRole('button')).toHaveLength(1)
+        // Cluster mode (#17) adds its own "Add cluster" button for everyone.
+        expect(within(main).getAllByRole('button')).toHaveLength(
+          status === 'cluster' ? 2 : 1,
+        )
       }
       if (status === 'collecting') {
         expect(
@@ -314,9 +317,12 @@ describe('board modes', () => {
       await waitFor(() => {
         expect(membersMock.fetchProjectMembers).toHaveBeenCalled()
       })
+      // Cluster mode (#17) shows the same "Add cluster" button to everyone.
       expect(
-        within(screen.getByRole('main')).queryAllByRole('button'),
-      ).toHaveLength(0)
+        within(screen.getByRole('main'))
+          .queryAllByRole('button')
+          .map((button) => button.textContent),
+      ).toEqual(status === 'cluster' ? ['Add cluster'] : [])
       expect(
         screen.queryByText('Start the retrospective from the project page.'),
       ).not.toBeInTheDocument()
@@ -440,7 +446,7 @@ describe('board modes', () => {
     },
   )
 
-  it.each(['cluster', 'vote', 'discuss'] as const)(
+  it.each(['vote', 'discuss'] as const)(
     'the %s placeholder is plain text with no control',
     async (status) => {
       setup({ board: boardOf(status) })
@@ -511,7 +517,8 @@ describe('board cards', () => {
     expect(html1).not.toMatch(/you|svg|data-/)
   })
 
-  it.each(['reveal', 'cluster', 'vote', 'discuss', 'closed'] as const)(
+  // Cluster mode always has its Ungrouped section (ClusterMode.test.tsx).
+  it.each(['reveal', 'vote', 'discuss', 'closed'] as const)(
     'with zero cards %s shows one line and no section',
     async (status) => {
       setup({ board: boardOf(status, true, []) })
