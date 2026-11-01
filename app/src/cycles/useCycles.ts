@@ -4,9 +4,11 @@ import {
   closeCycle,
   createCycle,
   fetchCycle,
+  fetchCycleStatus,
   fetchProjectCycles,
   type CreateCycleInput,
 } from './cyclesApi'
+import { cyclesErrorCodeOf } from './cyclesErrors'
 
 export const projectCyclesQueryKey = (
   userId: string | null,
@@ -15,6 +17,13 @@ export const projectCyclesQueryKey = (
 
 export const cycleQueryKey = (userId: string | null, cycleId: string) =>
   ['cycle', userId, cycleId] as const
+
+/**
+ * The submission status of one cycle. Exported so #14 can invalidate it after
+ * the retrospective starts.
+ */
+export const cycleStatusQueryKey = (userId: string | null, cycleId: string) =>
+  ['cycle-status', userId, cycleId] as const
 
 function useUserId() {
   const { status, user } = useAuth()
@@ -45,6 +54,25 @@ export function useCycleQuery(cycleId: string, enabled: boolean) {
     queryKey: cycleQueryKey(userId, cycleId),
     queryFn: () => fetchCycle(cycleId),
     enabled: ready && enabled,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+  })
+}
+
+/**
+ * The cycle's aggregate submission status. It is not live: it is read on
+ * mount, when the window regains focus, on reconnect, and on Retry, with no
+ * polling interval. After `not_project_member` it stays disabled, so no
+ * further status request is sent.
+ */
+export function useCycleStatusQuery(cycleId: string) {
+  const { userId, ready } = useUserId()
+
+  return useQuery({
+    queryKey: cycleStatusQueryKey(userId, cycleId),
+    queryFn: () => fetchCycleStatus(cycleId),
+    enabled: (query) =>
+      ready && cyclesErrorCodeOf(query.state.error) !== 'not_project_member',
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
   })

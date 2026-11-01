@@ -13,6 +13,7 @@ import { CreateCycleForm } from './CreateCycleForm'
 import type { CycleSummary } from './cyclesApi'
 import { cycleStatusLabel } from './cycleStatus'
 import { formatWeekStart } from './cycleWeek'
+import { SubmissionStatus } from './SubmissionStatus'
 import { closeCycleErrorMessage, cyclesErrorCodeOf } from './cyclesErrors'
 import {
   useCloseCycle,
@@ -82,6 +83,9 @@ function CurrentCycle({
           Opened {formatProjectDate(cycle.createdAt)}
         </p>
       </div>
+
+      {/* The same aggregate counts for every member, the facilitator included. */}
+      <SubmissionStatus projectId={projectId} cycleId={cycle.id} />
 
       {/* Every member, the facilitator included, gets the same link. */}
       <Link

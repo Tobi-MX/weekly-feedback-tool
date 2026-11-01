@@ -53,6 +53,21 @@ export interface ClosedCycle {
   readonly closedAt: string | null
 }
 
+/**
+ * A `get_cycle_status` row: aggregate submission counts for one cycle. It is
+ * the same for every member, the facilitator included, apart from
+ * `myCardCount`. `cardCount` is `null` until the cycle is revealed.
+ */
+export interface CycleSubmissionStatus {
+  readonly cycleId: string
+  readonly status: CycleStatus
+  readonly isRevealed: boolean
+  readonly memberCount: number
+  readonly submittedMemberCount: number
+  readonly myCardCount: number
+  readonly cardCount: number | null
+}
+
 /** Past cycles shown on the project page; older ones are #37's history. */
 export const PAST_CYCLES_LIMIT = 10
 
@@ -94,6 +109,19 @@ const closedRowSchema = z.object({
   closed_at: z.string().nullable(),
 })
 
+const countSchema = z.number().int().nonnegative()
+
+// Narrow: unknown keys (for example an author id) are dropped.
+const cycleStatusRowSchema = z.object({
+  cycle_id: z.string(),
+  status: statusSchema,
+  is_revealed: z.boolean(),
+  member_count: countSchema,
+  submitted_member_count: countSchema,
+  my_card_count: countSchema,
+  card_count: countSchema.nullable(),
+})
+
 interface DbError {
   readonly message: string
 }
@@ -124,7 +152,7 @@ function toSummary(row: z.infer<typeof cycleRowSchema>): CycleSummary {
 
 /** Calls an RPC and keeps only the stable error code on failure. */
 async function callRpc(
-  name: 'create_cycle' | 'close_cycle',
+  name: 'create_cycle' | 'close_cycle' | 'get_cycle_status',
   args: Record<string, unknown>,
 ): Promise<unknown> {
   if (!supabase) {
@@ -251,4 +279,28 @@ export async function closeCycle(cycleId: string): Promise<ClosedCycle> {
     throw new CyclesApiError('unknown')
   }
   return { id: row.id, status: row.status, closedAt: row.closed_at }
+}
+
+/**
+ * The cycle's submission status for the signed-in member. It calls only the
+ * `get_cycle_status` RPC, never the cards tables, and keeps only the seven
+ * aggregate columns.
+ */
+export async function fetchCycleStatus(
+  cycleId: string,
+): Promise<CycleSubmissionStatus> {
+  const data = await callRpc('get_cycle_status', { p_cycle_id: cycleId })
+  const [row] = parseRows(cycleStatusRowSchema, data)
+  if (!row) {
+    throw new CyclesApiError('unknown')
+  }
+  return {
+    cycleId: row.cycle_id,
+    status: row.status,
+    isRevealed: row.is_revealed,
+    memberCount: row.member_count,
+    submittedMemberCount: row.submitted_member_count,
+    myCardCount: row.my_card_count,
+    cardCount: row.card_count,
+  }
 }

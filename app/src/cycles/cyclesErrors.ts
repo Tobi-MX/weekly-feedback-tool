@@ -1,5 +1,6 @@
 /**
- * Stable error codes raised by `create_cycle` and `close_cycle`. The database
+ * Stable error codes raised by `create_cycle`, `close_cycle`, and
+ * `get_cycle_status` (which raises only `not_project_member`). The database
  * raises them as the exception message; nothing else from a Postgres error is
  * ever kept, shown, or logged.
  */
