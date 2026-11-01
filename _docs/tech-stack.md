@@ -134,7 +134,8 @@ Audio/video transcription is delegated to a managed speech-to-text API. Running 
 - `cards` contains **no `author_id`**.
 - Authorship is stored in a separate `card_authors` table that no client role can read: `anon`, `authenticated`, and `PUBLIC` have no privilege on it, and RLS is enabled with no policies. `cards` is locked down the same way.
 - Authors read their own cards through `get_my_cards`, which matches `card_authors.author_id = auth.uid()` inside the function, and write them only through `create_card`, `update_card`, and `delete_card` while the cycle is `collecting`. No card RPC takes a user id or returns an author id, and a card the caller did not write gets the same `card_not_found` error as a card that does not exist.
-- The board is loaded through `get_cycle_board`, which returns `is_mine` and, only for attributed cards after reveal, the author's display name. Anonymous cards never join to authorship.
+- The board is loaded through `get_cycle_board`, which shows only the caller's own cards until `revealed_at` is set and every card after. Attributed cards carry the author's display name and `is_mine`. Anonymous cards carry neither and are identical for every caller.
+- Card timestamps and creation order are visible only to the author; the board returns no timestamps and orders cards by category, then random card id.
 - The facilitator uses the same RPC and cannot retrieve anonymous authors in the product.
 
 **Pre-reveal visibility**
@@ -246,7 +247,7 @@ All RPCs validate the caller's membership and the current cycle stage.
 
 | RPC | Purpose |
 |---|---|
-| `get_cycle_board` | Visible cards, clusters, cluster assignments, my votes, `is_mine`, attributed author names after reveal |
+| `get_cycle_board` | Cards visible to the caller (own before reveal, all after), attributed author names, `is_mine` on attributed cards; clusters (#17) and own votes (#22) added later; never vote totals |
 | `get_cycle_status` | One row: `cycle_id`, `status`, `is_revealed`, `member_count`, `submitted_member_count`, `my_card_count`, and `card_count` (null before reveal). Aggregate counts only — no ids, names, times, or card content. Voting status is left to #24 |
 | `create_card` | Own card during collecting; accepts `is_anonymous` per card |
 | `update_card` / `delete_card` | Own card, collecting stage only |
