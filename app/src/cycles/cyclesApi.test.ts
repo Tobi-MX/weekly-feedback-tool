@@ -15,7 +15,7 @@ vi.mock('../auth/supabaseClient', () => ({
   },
 }))
 
-const { fetchProjectCycles, createCycle, closeCycle } =
+const { fetchProjectCycles, fetchCycle, createCycle, closeCycle } =
   await vi.importActual<typeof import('./cyclesApi')>('./cyclesApi')
 
 interface DbResult {
@@ -67,6 +67,7 @@ function createClientMock(results: DbResult[]) {
       neq: (...args: unknown[]) => record('neq', args),
       order: (...args: unknown[]) => record('order', args),
       limit: (...args: unknown[]) => record('limit', args),
+      maybeSingle: (...args: unknown[]) => record('maybeSingle', args),
       then<T>(onFulfilled: (value: DbResult) => T): Promise<T> {
         return Promise.resolve(result).then(onFulfilled)
       },
@@ -198,6 +199,81 @@ describe('fetchProjectCycles', () => {
     await expect(fetchProjectCycles(PROJECT_ID)).rejects.toBeInstanceOf(
       CyclesApiError,
     )
+  })
+})
+
+describe('fetchCycle', () => {
+  const detailRow = {
+    id: CYCLE_ID,
+    project_id: PROJECT_ID,
+    title: 'Week of Oct 26, 2026',
+    week_start: '2026-10-26',
+    status: 'collecting',
+  }
+
+  it('reads one cycle by id with only the five columns and maybeSingle', async () => {
+    const fake = createClientMock([{ data: detailRow, error: null }])
+
+    await expect(fetchCycle(CYCLE_ID)).resolves.toEqual({
+      id: CYCLE_ID,
+      projectId: PROJECT_ID,
+      title: 'Week of Oct 26, 2026',
+      weekStart: '2026-10-26',
+      status: 'collecting',
+    })
+    expect(fake.chains).toEqual([
+      [
+        ['from', 'feedback_cycles'],
+        ['select', 'id, project_id, title, week_start, status'],
+        ['eq', 'id', CYCLE_ID],
+        ['maybeSingle'],
+      ],
+    ])
+    expect(fake.rpc).not.toHaveBeenCalled()
+  })
+
+  it('drops columns it did not ask for', async () => {
+    createClientMock([
+      { data: { ...detailRow, created_by: 'user-9' }, error: null },
+    ])
+
+    const cycle = await fetchCycle(CYCLE_ID)
+    expect(cycle).not.toHaveProperty('created_by')
+    expect(cycle).not.toHaveProperty('createdBy')
+  })
+
+  it('returns null for zero rows (unknown id or not a member)', async () => {
+    createClientMock([{ data: null, error: null }])
+
+    await expect(fetchCycle(CYCLE_ID)).resolves.toBeNull()
+  })
+
+  it('makes no request for a non-UUID id', async () => {
+    const fake = createClientMock([])
+
+    await expect(fetchCycle('cycle-1')).resolves.toBeNull()
+    expect(fake.from).not.toHaveBeenCalled()
+  })
+
+  it('throws a coded error without the raw Postgres text', async () => {
+    createClientMock([
+      { data: null, error: { message: 'permission denied for table x' } },
+    ])
+
+    const error = await captureError(fetchCycle(CYCLE_ID))
+    expect(error).toBeInstanceOf(CyclesApiError)
+    expect((error as CyclesApiError).code).toBe('unknown')
+    expect((error as CyclesApiError).message).not.toContain('permission')
+  })
+
+  it('rejects a row with an unknown status', async () => {
+    createClientMock([{ data: { ...detailRow, status: 'open' }, error: null }])
+
+    await expect(fetchCycle(CYCLE_ID)).rejects.toBeInstanceOf(CyclesApiError)
+  })
+
+  it('throws when Supabase is not configured', async () => {
+    await expect(fetchCycle(CYCLE_ID)).rejects.toBeInstanceOf(CyclesApiError)
   })
 })
 

@@ -3,6 +3,7 @@ import { useAuth } from '@/auth/AuthProvider'
 import {
   closeCycle,
   createCycle,
+  fetchCycle,
   fetchProjectCycles,
   type CreateCycleInput,
 } from './cyclesApi'
@@ -11,6 +12,9 @@ export const projectCyclesQueryKey = (
   userId: string | null,
   projectId: string,
 ) => ['project-cycles', userId, projectId] as const
+
+export const cycleQueryKey = (userId: string | null, cycleId: string) =>
+  ['cycle', userId, cycleId] as const
 
 function useUserId() {
   const { status, user } = useAuth()
@@ -26,6 +30,23 @@ export function useProjectCyclesQuery(projectId: string | undefined) {
     queryKey: projectCyclesQueryKey(userId, projectId ?? ''),
     queryFn: () => fetchProjectCycles(projectId ?? ''),
     enabled: ready && Boolean(projectId),
+  })
+}
+
+/**
+ * One cycle by id, scoped by user and cycle id. It is re-read when the window
+ * regains focus and when the browser reconnects, so a page that depends on the
+ * stage sees a change without a reload (the app default turns focus off).
+ */
+export function useCycleQuery(cycleId: string, enabled: boolean) {
+  const { userId, ready } = useUserId()
+
+  return useQuery({
+    queryKey: cycleQueryKey(userId, cycleId),
+    queryFn: () => fetchCycle(cycleId),
+    enabled: ready && enabled,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   })
 }
 

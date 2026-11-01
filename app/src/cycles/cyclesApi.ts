@@ -37,6 +37,15 @@ export interface CreatedCycle {
   readonly createdAt: string
 }
 
+/** One cycle, as the feedback form reads it by id. */
+export interface CycleDetail {
+  readonly id: string
+  readonly projectId: string
+  readonly title: string
+  readonly weekStart: string
+  readonly status: CycleStatus
+}
+
 /** The `close_cycle` result row. */
 export interface ClosedCycle {
   readonly id: string
@@ -48,6 +57,8 @@ export interface ClosedCycle {
 export const PAST_CYCLES_LIMIT = 10
 
 const CYCLE_COLUMNS = 'id, title, week_start, status, created_at, closed_at'
+
+const CYCLE_DETAIL_COLUMNS = 'id, project_id, title, week_start, status'
 
 const statusSchema = z.enum(CYCLE_STATUSES)
 
@@ -67,6 +78,14 @@ const createdRowSchema = z.object({
   week_start: z.string(),
   status: statusSchema,
   created_at: z.string(),
+})
+
+const cycleDetailRowSchema = z.object({
+  id: z.string(),
+  project_id: z.string(),
+  title: z.string(),
+  week_start: z.string(),
+  status: statusSchema,
 })
 
 const closedRowSchema = z.object({
@@ -158,6 +177,46 @@ export async function fetchProjectCycles(
   return {
     current: current ? toSummary(current) : null,
     past: past.map(toSummary),
+  }
+}
+
+/**
+ * Loads one cycle by id. A non-UUID id resolves to `null` without a request;
+ * an unknown id and a cycle in a project the caller is not a member of both
+ * return zero rows under RLS and also resolve to `null`.
+ */
+export async function fetchCycle(cycleId: string): Promise<CycleDetail | null> {
+  if (!supabase) {
+    throw new CyclesApiError('unknown')
+  }
+  if (!isProjectId(cycleId)) {
+    return null
+  }
+
+  const { data, error }: DbResult = await supabase
+    .from('feedback_cycles')
+    .select(CYCLE_DETAIL_COLUMNS)
+    .eq('id', cycleId)
+    .maybeSingle()
+
+  if (error) {
+    throw new CyclesApiError('unknown')
+  }
+  if (data === null || data === undefined) {
+    return null
+  }
+
+  const parsed = cycleDetailRowSchema.safeParse(data)
+  if (!parsed.success) {
+    throw new CyclesApiError('unknown')
+  }
+  const row = parsed.data
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    title: row.title,
+    weekStart: row.week_start,
+    status: row.status,
   }
 }
 
