@@ -15,8 +15,13 @@ vi.mock('../auth/supabaseClient', () => ({
   },
 }))
 
-const { fetchProjectCycles, fetchCycle, createCycle, closeCycle } =
-  await vi.importActual<typeof import('./cyclesApi')>('./cyclesApi')
+const {
+  fetchProjectCycles,
+  fetchCycle,
+  createCycle,
+  closeCycle,
+  fetchCycleStatus,
+} = await vi.importActual<typeof import('./cyclesApi')>('./cyclesApi')
 
 interface DbResult {
   readonly data: unknown
@@ -441,5 +446,130 @@ describe('error mapping', () => {
     for (const code of ['not_project_member', 'unknown'] as const) {
       expect(closeCycleErrorMessage(code)).toBe('Could not close the cycle.')
     }
+  })
+})
+
+describe('fetchCycleStatus', () => {
+  const statusRow = {
+    cycle_id: CYCLE_ID,
+    status: 'collecting',
+    is_revealed: false,
+    member_count: 3,
+    submitted_member_count: 2,
+    my_card_count: 1,
+    card_count: null,
+  }
+
+  it('calls only get_cycle_status with exactly the cycle id', async () => {
+    const fake = createClientMock([])
+    fake.rpc.mockResolvedValue({ data: [statusRow], error: null })
+
+    await fetchCycleStatus(CYCLE_ID)
+
+    expect(fake.rpc).toHaveBeenCalledTimes(1)
+    const [name, args] = fake.rpc.mock.calls[0] ?? []
+    expect(name).toBe('get_cycle_status')
+    expect(args).toStrictEqual({ p_cycle_id: CYCLE_ID })
+    expect(fake.from).not.toHaveBeenCalled()
+  })
+
+  it('parses a null card_count before reveal', async () => {
+    const fake = createClientMock([])
+    fake.rpc.mockResolvedValue({ data: [statusRow], error: null })
+
+    await expect(fetchCycleStatus(CYCLE_ID)).resolves.toStrictEqual({
+      cycleId: CYCLE_ID,
+      status: 'collecting',
+      isRevealed: false,
+      memberCount: 3,
+      submittedMemberCount: 2,
+      myCardCount: 1,
+      cardCount: null,
+    })
+  })
+
+  it('parses a numeric card_count after reveal', async () => {
+    const fake = createClientMock([])
+    fake.rpc.mockResolvedValue({
+      data: [
+        { ...statusRow, status: 'reveal', is_revealed: true, card_count: 7 },
+      ],
+      error: null,
+    })
+
+    await expect(fetchCycleStatus(CYCLE_ID)).resolves.toStrictEqual({
+      cycleId: CYCLE_ID,
+      status: 'reveal',
+      isRevealed: true,
+      memberCount: 3,
+      submittedMemberCount: 2,
+      myCardCount: 1,
+      cardCount: 7,
+    })
+  })
+
+  it('drops an extra author_id field', async () => {
+    const fake = createClientMock([])
+    const authorId = '20000000-0000-4000-8000-000000000009'
+    fake.rpc.mockResolvedValue({
+      data: [{ ...statusRow, author_id: authorId }],
+      error: null,
+    })
+
+    const result = await fetchCycleStatus(CYCLE_ID)
+    expect(Object.keys(result).sort()).toEqual([
+      'cardCount',
+      'cycleId',
+      'isRevealed',
+      'memberCount',
+      'myCardCount',
+      'status',
+      'submittedMemberCount',
+    ])
+    expect(JSON.stringify(result)).not.toContain(authorId)
+  })
+
+  it.each([
+    ['no row', []],
+    ['a row with a missing count', [{ ...statusRow, member_count: null }]],
+    ['a row with an unknown status', [{ ...statusRow, status: 'open' }]],
+  ])('treats %s as an unknown failure', async (_label, data) => {
+    const fake = createClientMock([])
+    fake.rpc.mockResolvedValue({ data, error: null })
+
+    const error = await captureError(fetchCycleStatus(CYCLE_ID))
+    expect(error).toBeInstanceOf(CyclesApiError)
+    expect((error as CyclesApiError).code).toBe('unknown')
+  })
+
+  it.each<[string, string, CyclesErrorCode]>([
+    ['42501', 'not_project_member', 'not_project_member'],
+    ['42501', 'permission denied for function get_cycle_status', 'unknown'],
+    ['XX000', 'something broke near card_authors', 'unknown'],
+  ])(
+    '%s %s becomes %s without keeping or logging the raw text',
+    async (pgCode, message, code) => {
+      const fake = createClientMock([])
+      fake.rpc.mockResolvedValue({
+        data: null,
+        error: { code: pgCode, message },
+      })
+
+      const error = await captureError(fetchCycleStatus(CYCLE_ID))
+      expect(error).toBeInstanceOf(CyclesApiError)
+      expect((error as CyclesApiError).code).toBe(code)
+      expect((error as CyclesApiError).message).toBe(code)
+      if (code === 'unknown') {
+        expect(JSON.stringify(error)).not.toContain(message)
+      }
+      expect(console.error).not.toHaveBeenCalled()
+      expect(console.warn).not.toHaveBeenCalled()
+      expect(console.log).not.toHaveBeenCalled()
+    },
+  )
+
+  it('rejects when Supabase is not configured', async () => {
+    const error = await captureError(fetchCycleStatus(CYCLE_ID))
+    expect((error as CyclesApiError).code).toBe('unknown')
   })
 })

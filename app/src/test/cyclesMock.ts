@@ -4,6 +4,7 @@ import type {
   CycleDetail,
   CreateCycleInput,
   CreatedCycle,
+  CycleSubmissionStatus,
   ProjectCycles,
 } from '../cycles/cyclesApi'
 import { CyclesApiError } from '../cycles/cyclesErrors'
@@ -18,6 +19,8 @@ export const cyclesMock = {
   fetchCycle: vi.fn<(cycleId: string) => Promise<CycleDetail | null>>(),
   createCycle: vi.fn<(input: CreateCycleInput) => Promise<CreatedCycle>>(),
   closeCycle: vi.fn<(cycleId: string) => Promise<ClosedCycle>>(),
+  fetchCycleStatus:
+    vi.fn<(cycleId: string) => Promise<CycleSubmissionStatus>>(),
 
   resetCyclesMock(): void {
     cyclesMock.fetchProjectCycles
@@ -30,6 +33,18 @@ export const cyclesMock = {
     cyclesMock.closeCycle
       .mockReset()
       .mockRejectedValue(new CyclesApiError('unknown'))
+    // A sole member with no cards, so pages with an open cycle render.
+    cyclesMock.fetchCycleStatus.mockReset().mockImplementation((cycleId) =>
+      Promise.resolve({
+        cycleId,
+        status: 'collecting',
+        isRevealed: false,
+        memberCount: 1,
+        submittedMemberCount: 0,
+        myCardCount: 0,
+        cardCount: null,
+      }),
+    )
   },
 }
 
