@@ -6,6 +6,7 @@ import {
   fetchCycle,
   fetchCycleStatus,
   fetchProjectCycles,
+  startRetrospective,
   type CreateCycleInput,
 } from './cyclesApi'
 import { cyclesErrorCodeOf } from './cyclesErrors'
@@ -31,7 +32,11 @@ function useUserId() {
   return { userId, ready: status === 'authenticated' && userId !== null }
 }
 
-/** A project's current and past cycles, scoped by user and project id. */
+/**
+ * A project's current and past cycles, scoped by user and project id. It is
+ * re-read when the window regains focus and on reconnect, so the page catches
+ * up with a stage change even when Realtime is down. It never polls.
+ */
 export function useProjectCyclesQuery(projectId: string | undefined) {
   const { userId, ready } = useUserId()
 
@@ -39,6 +44,8 @@ export function useProjectCyclesQuery(projectId: string | undefined) {
     queryKey: projectCyclesQueryKey(userId, projectId ?? ''),
     queryFn: () => fetchProjectCycles(projectId ?? ''),
     enabled: ready && Boolean(projectId),
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   })
 }
 
@@ -106,5 +113,36 @@ export function useCloseCycle(projectId: string) {
   return useMutation({
     mutationFn: (cycleId: string) => closeCycle(cycleId),
     onSuccess: () => invalidate(),
+  })
+}
+
+/**
+ * Invalidates the two queries a stage change affects: the project's cycles
+ * and the cycle's submission status.
+ */
+export function useInvalidateCycleStage(projectId: string) {
+  const { userId } = useUserId()
+  const queryClient = useQueryClient()
+  return (cycleId: string) =>
+    Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: projectCyclesQueryKey(userId, projectId),
+      }),
+      queryClient.invalidateQueries({
+        queryKey: cycleStatusQueryKey(userId, cycleId),
+      }),
+    ])
+}
+
+/**
+ * Starting the retrospective refetches the cycles and the cycle's status;
+ * nothing is optimistic.
+ */
+export function useStartRetrospective(projectId: string) {
+  const invalidate = useInvalidateCycleStage(projectId)
+
+  return useMutation({
+    mutationFn: (cycleId: string) => startRetrospective(cycleId),
+    onSuccess: (_row, cycleId) => invalidate(cycleId),
   })
 }

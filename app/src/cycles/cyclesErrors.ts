@@ -1,6 +1,7 @@
 /**
- * Stable error codes raised by `create_cycle`, `close_cycle`, and
- * `get_cycle_status` (which raises only `not_project_member`). The database
+ * Stable error codes raised by `create_cycle`, `close_cycle`,
+ * `start_retrospective`, and `get_cycle_status` (which raises only
+ * `not_project_member`). The database
  * raises them as the exception message; nothing else from a Postgres error is
  * ever kept, shown, or logged.
  */
@@ -10,6 +11,7 @@ export const CYCLES_ERROR_CODES = [
   'invalid_cycle_title',
   'invalid_week_start',
   'cycle_already_open',
+  'cycle_not_collecting',
 ] as const
 
 export type CyclesErrorCode = (typeof CYCLES_ERROR_CODES)[number] | 'unknown'
@@ -55,5 +57,17 @@ export function closeCycleErrorMessage(code: CyclesErrorCode): string {
       return 'Only the facilitator can close the cycle.'
     default:
       return 'Could not close the cycle.'
+  }
+}
+
+/** The message shown when starting the retrospective fails. */
+export function startRetrospectiveErrorMessage(code: CyclesErrorCode): string {
+  switch (code) {
+    case 'not_project_facilitator':
+      return 'Only the facilitator can start the retrospective.'
+    case 'cycle_not_collecting':
+      return 'Feedback collection has already ended for this cycle.'
+    default:
+      return 'Could not start the retrospective.'
   }
 }

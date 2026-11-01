@@ -1,6 +1,6 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useAuth } from '@/auth/AuthProvider'
 import { Button } from '@/components/ui/button'
@@ -9,20 +9,117 @@ import {
   projectMembersQueryKey,
   useProjectMembersQuery,
 } from '@/projects/useMembers'
+import { projectQueryKey } from '@/projects/useProjects'
 import { CreateCycleForm } from './CreateCycleForm'
-import type { CycleSummary } from './cyclesApi'
-import { cycleStatusLabel } from './cycleStatus'
+import type { CycleSubmissionStatus, CycleSummary } from './cyclesApi'
+import { cycleStatusLabel, type CycleStatus } from './cycleStatus'
 import { formatWeekStart } from './cycleWeek'
 import { SubmissionStatus } from './SubmissionStatus'
-import { closeCycleErrorMessage, cyclesErrorCodeOf } from './cyclesErrors'
 import {
+  closeCycleErrorMessage,
+  cyclesErrorCodeOf,
+  startRetrospectiveErrorMessage,
+} from './cyclesErrors'
+import { useCycleEvents } from './useCycleEvents'
+import {
+  projectCyclesQueryKey,
   useCloseCycle,
+  useCycleStatusQuery,
+  useInvalidateCycleStage,
   useInvalidateProjectCycles,
   useProjectCyclesQuery,
+  useStartRetrospective,
 } from './useCycles'
 
 const CLOSE_CONFIRM_COPY =
   'Closing ends this cycle for everyone. Feedback can no longer be added and the cycle cannot be reopened.'
+
+const START_CONFIRM_COPY =
+  'Start the retrospective? Feedback collection ends for everyone, and every card in this cycle becomes visible to all project members. Names are shown only on cards that were not submitted anonymously. This cannot be undone.'
+
+/** Stages in which the retrospective board is open. */
+const BOARD_STATUSES: readonly CycleStatus[] = [
+  'reveal',
+  'cluster',
+  'vote',
+  'discuss',
+]
+
+/**
+ * The confirmation's one line of submission data: the same aggregate every
+ * member sees, never a card count.
+ */
+function submittersLine(status: CycleSubmissionStatus): string {
+  if (status.submittedMemberCount === 0) {
+    return 'No one has added feedback yet.'
+  }
+  const members = status.memberCount === 1 ? 'member' : 'members'
+  const verb = status.memberCount === 1 ? 'has' : 'have'
+  return `${status.submittedMemberCount} of ${status.memberCount} ${members} ${verb} added feedback.`
+}
+
+interface StartConfirmationProps {
+  readonly cycleId: string
+  readonly pending: boolean
+  readonly onCancel: () => void
+  readonly onConfirm: () => void
+}
+
+/** The inline "Start retrospective" confirmation. */
+function StartConfirmation({
+  cycleId,
+  pending,
+  onCancel,
+  onConfirm,
+}: StartConfirmationProps) {
+  // The same query (and key) as the Submission status block: no new request.
+  const statusQuery = useCycleStatusQuery(cycleId)
+  const cancelRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    cancelRef.current?.focus()
+  }, [])
+
+  let line: string
+  if (statusQuery.data) {
+    line = submittersLine(statusQuery.data)
+  } else if (statusQuery.isError) {
+    line = 'Could not load submission status.'
+  } else {
+    line = 'Loading submission status…'
+  }
+
+  return (
+    <div
+      role="group"
+      aria-label="Start retrospective"
+      className="space-y-3 rounded-md border border-destructive/30 p-3"
+      onKeyDown={(event) => {
+        if (event.key === 'Escape' && !pending) {
+          event.preventDefault()
+          onCancel()
+        }
+      }}
+    >
+      <p className={`text-sm ${wrapText}`}>{START_CONFIRM_COPY}</p>
+      <p className={`text-sm ${wrapText}`}>{line}</p>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          ref={cancelRef}
+          type="button"
+          variant="outline"
+          disabled={pending}
+          onClick={onCancel}
+        >
+          Cancel
+        </Button>
+        <Button type="button" disabled={pending} onClick={onConfirm}>
+          {pending ? 'Starting…' : 'Start retrospective'}
+        </Button>
+      </div>
+    </div>
+  )
+}
 
 const wrapText = 'min-w-0 break-words [overflow-wrap:anywhere]'
 
@@ -33,16 +130,70 @@ interface CurrentCycleProps {
   readonly onRoleChanged: () => void
 }
 
+type Confirming = 'close' | 'start' | null
+
 function CurrentCycle({
   projectId,
   cycle,
   isFacilitator,
   onRoleChanged,
 }: CurrentCycleProps) {
+  const { user } = useAuth()
+  const userId = user?.id ?? null
+  const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const closeMutation = useCloseCycle(projectId)
-  const [confirming, setConfirming] = useState(false)
+  const startMutation = useStartRetrospective(projectId)
+  const invalidateStage = useInvalidateCycleStage(projectId)
+  // Only one of the two confirmations is open at a time.
+  const [confirming, setConfirming] = useState<Confirming>(null)
   // A synchronous second click must not send a second request.
   const pendingRef = useRef(false)
+  const startPendingRef = useRef(false)
+  const startButtonRef = useRef<HTMLButtonElement>(null)
+  const canStart = isFacilitator && cycle.status === 'collecting'
+  const boardOpen = BOARD_STATUSES.includes(cycle.status)
+
+  const cancelStart = () => {
+    setConfirming(null)
+    // Focus returns to the button that opened the confirmation.
+    queueMicrotask(() => {
+      startButtonRef.current?.focus()
+    })
+  }
+
+  const confirmStart = () => {
+    if (startPendingRef.current) {
+      return
+    }
+    startPendingRef.current = true
+    startMutation
+      .mutateAsync(cycle.id)
+      .then((row) => {
+        toast.success('Retrospective started.')
+        void navigate(`/cycles/${row.id}/board`)
+      })
+      .catch((error: unknown) => {
+        const code = cyclesErrorCodeOf(error)
+        toast.error(startRetrospectiveErrorMessage(code))
+        if (code === 'not_project_facilitator') {
+          onRoleChanged()
+        } else if (code === 'cycle_not_collecting') {
+          void invalidateStage(cycle.id)
+        } else if (code === 'not_project_member') {
+          void queryClient.invalidateQueries({
+            queryKey: projectQueryKey(userId, projectId),
+          })
+          void queryClient.invalidateQueries({
+            queryKey: projectCyclesQueryKey(userId, projectId),
+          })
+        }
+      })
+      .finally(() => {
+        startPendingRef.current = false
+        setConfirming(null)
+      })
+  }
 
   const confirmClose = () => {
     if (pendingRef.current) {
@@ -63,7 +214,7 @@ function CurrentCycle({
       })
       .finally(() => {
         pendingRef.current = false
-        setConfirming(false)
+        setConfirming(null)
       })
   }
 
@@ -95,19 +246,51 @@ function CurrentCycle({
         {cycle.status === 'collecting' ? 'Add feedback' : 'View my feedback'}
       </Link>
 
-      {isFacilitator && !confirming ? (
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => {
-            setConfirming(true)
-          }}
+      {/* Every member, the facilitator included, gets the board link. */}
+      {boardOpen ? (
+        <Link
+          to={`/cycles/${cycle.id}/board`}
+          className="block text-sm font-medium underline underline-offset-4"
         >
-          Close cycle
-        </Button>
+          Open retrospective board
+        </Link>
       ) : null}
 
-      {isFacilitator && confirming ? (
+      {isFacilitator && confirming === null ? (
+        <div className="flex flex-wrap gap-2">
+          {canStart ? (
+            <Button
+              ref={startButtonRef}
+              type="button"
+              onClick={() => {
+                setConfirming('start')
+              }}
+            >
+              Start retrospective
+            </Button>
+          ) : null}
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              setConfirming('close')
+            }}
+          >
+            Close cycle
+          </Button>
+        </div>
+      ) : null}
+
+      {canStart && confirming === 'start' ? (
+        <StartConfirmation
+          cycleId={cycle.id}
+          pending={startMutation.isPending}
+          onCancel={cancelStart}
+          onConfirm={confirmStart}
+        />
+      ) : null}
+
+      {isFacilitator && confirming === 'close' ? (
         <div className="space-y-3 rounded-md border border-destructive/30 p-3">
           <p className="text-sm">{CLOSE_CONFIRM_COPY}</p>
           <div className="flex flex-wrap gap-2">
@@ -116,7 +299,7 @@ function CurrentCycle({
               variant="outline"
               disabled={closeMutation.isPending}
               onClick={() => {
-                setConfirming(false)
+                setConfirming(null)
               }}
             >
               Cancel
@@ -187,6 +370,32 @@ export function ProjectCycles({ projectId }: { projectId: string }) {
 
   const cycles = cyclesQuery.data
   const current = cycles?.current ?? null
+  const currentId = current?.id ?? null
+  const invalidateStage = useInvalidateCycleStage(projectId)
+
+  // One live cycle_events channel while there is an open cycle. Each event,
+  // and each SUBSCRIBED (so a missed event is caught up), re-reads the cycles
+  // and the status. Nothing is read from the message, and nothing polls.
+  useCycleEvents(currentId, () => {
+    if (currentId !== null) {
+      void invalidateStage(currentId)
+    }
+  })
+
+  // TanStack re-reads on visibilitychange; also re-read the cycles when the
+  // window itself regains focus, as the status block does.
+  useEffect(() => {
+    const onFocus = () => {
+      void queryClient.refetchQueries(
+        { queryKey: projectCyclesQueryKey(userId, projectId), type: 'active' },
+        { cancelRefetch: false },
+      )
+    }
+    window.addEventListener('focus', onFocus)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [queryClient, userId, projectId])
 
   return (
     <div className="min-w-0 space-y-6">

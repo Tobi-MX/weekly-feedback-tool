@@ -3,6 +3,7 @@ import {
   CyclesApiError,
   closeCycleErrorMessage,
   createCycleErrorMessage,
+  startRetrospectiveErrorMessage,
   toCyclesErrorCode,
   type CyclesErrorCode,
 } from './cyclesErrors'
@@ -21,6 +22,7 @@ const {
   createCycle,
   closeCycle,
   fetchCycleStatus,
+  startRetrospective,
 } = await vi.importActual<typeof import('./cyclesApi')>('./cyclesApi')
 
 interface DbResult {
@@ -571,5 +573,98 @@ describe('fetchCycleStatus', () => {
   it('rejects when Supabase is not configured', async () => {
     const error = await captureError(fetchCycleStatus(CYCLE_ID))
     expect((error as CyclesApiError).code).toBe('unknown')
+  })
+})
+
+describe('startRetrospective', () => {
+  const startedRow = {
+    id: CYCLE_ID,
+    status: 'reveal',
+    revealed_at: '2026-11-01T12:00:00+00:00',
+  }
+
+  it('calls only start_retrospective with exactly the cycle id', async () => {
+    const fake = createClientMock([])
+    fake.rpc.mockResolvedValue({ data: [startedRow], error: null })
+
+    await expect(startRetrospective(CYCLE_ID)).resolves.toStrictEqual({
+      id: CYCLE_ID,
+      status: 'reveal',
+      revealedAt: '2026-11-01T12:00:00+00:00',
+    })
+    expect(fake.rpc).toHaveBeenCalledTimes(1)
+    const [name, args] = fake.rpc.mock.calls[0] ?? []
+    expect(name).toBe('start_retrospective')
+    expect(args).toStrictEqual({ p_cycle_id: CYCLE_ID })
+    expect(fake.from).not.toHaveBeenCalled()
+  })
+
+  it('drops an extra field', async () => {
+    const fake = createClientMock([])
+    fake.rpc.mockResolvedValue({
+      data: [{ ...startedRow, card_count: 7 }],
+      error: null,
+    })
+
+    const result = await startRetrospective(CYCLE_ID)
+    expect(Object.keys(result).sort()).toEqual(['id', 'revealedAt', 'status'])
+  })
+
+  it.each([
+    ['no row', []],
+    ['a row with an unknown status', [{ ...startedRow, status: 'open' }]],
+    ['a row without revealed_at', [{ id: CYCLE_ID, status: 'reveal' }]],
+  ])('treats %s as an unknown failure', async (_label, data) => {
+    const fake = createClientMock([])
+    fake.rpc.mockResolvedValue({ data, error: null })
+
+    const error = await captureError(startRetrospective(CYCLE_ID))
+    expect(error).toBeInstanceOf(CyclesApiError)
+    expect((error as CyclesApiError).code).toBe('unknown')
+  })
+
+  it.each<[string, string, CyclesErrorCode]>([
+    ['42501', 'not_project_member', 'not_project_member'],
+    ['42501', 'not_project_facilitator', 'not_project_facilitator'],
+    ['P0001', 'cycle_not_collecting', 'cycle_not_collecting'],
+    ['42501', 'permission denied for function start_retrospective', 'unknown'],
+    ['P0001', 'cycle_not_collecting: reveal', 'unknown'],
+    ['PGRST202', 'Could not find the function', 'unknown'],
+  ])(
+    '%s %s becomes %s without keeping or logging the raw text',
+    async (pgCode, message, code) => {
+      const fake = createClientMock([])
+      fake.rpc.mockResolvedValue({
+        data: null,
+        error: { code: pgCode, message },
+      })
+
+      const error = await captureError(startRetrospective(CYCLE_ID))
+      expect(error).toBeInstanceOf(CyclesApiError)
+      expect((error as CyclesApiError).code).toBe(code)
+      expect((error as CyclesApiError).message).toBe(code)
+      expect(console.error).not.toHaveBeenCalled()
+      expect(console.warn).not.toHaveBeenCalled()
+      expect(console.log).not.toHaveBeenCalled()
+    },
+  )
+
+  it('rejects when Supabase is not configured', async () => {
+    const error = await captureError(startRetrospective(CYCLE_ID))
+    expect((error as CyclesApiError).code).toBe('unknown')
+  })
+
+  it('maps each code to a fixed message', () => {
+    expect(startRetrospectiveErrorMessage('not_project_facilitator')).toBe(
+      'Only the facilitator can start the retrospective.',
+    )
+    expect(startRetrospectiveErrorMessage('cycle_not_collecting')).toBe(
+      'Feedback collection has already ended for this cycle.',
+    )
+    for (const code of ['not_project_member', 'unknown'] as const) {
+      expect(startRetrospectiveErrorMessage(code)).toBe(
+        'Could not start the retrospective.',
+      )
+    }
   })
 })
