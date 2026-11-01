@@ -114,6 +114,7 @@ interface ModeProps {
   readonly board: CycleBoard
   readonly isFacilitator: boolean
   readonly headingRef: RefObject<HTMLHeadingElement | null>
+  readonly onAdvanceStart: (target: CycleStatus) => void
   readonly onAdvanced: (target: CycleStatus) => void
   readonly onAdvanceFailed: (code: CyclesErrorCode) => void
 }
@@ -128,6 +129,7 @@ function BoardMode({
   board,
   isFacilitator,
   headingRef,
+  onAdvanceStart,
   onAdvanced,
   onAdvanceFailed,
 }: ModeProps) {
@@ -206,6 +208,9 @@ function BoardMode({
           key={from}
           cycleId={board.cycleId}
           from={from}
+          onStart={() => {
+            onAdvanceStart(ADVANCE_TARGET[from])
+          }}
           onAdvanced={() => {
             onAdvanced(ADVANCE_TARGET[from])
           }}
@@ -216,6 +221,11 @@ function BoardMode({
       {isRevealed ? <BoardCardList cards={cards} /> : null}
     </section>
   )
+}
+
+interface FocusRequest {
+  readonly target: CycleStatus
+  readonly succeeded: boolean
 }
 
 interface StageAnnouncement {
@@ -238,9 +248,14 @@ function BoardScreen({ cycleId }: { cycleId: string }) {
     text: '',
   })
   const headingRef = useRef<HTMLHeadingElement | null>(null)
-  // The stage the caller's own advance moved to: focus goes to its h2 once
-  // the board shows it.
-  const focusStageRef = useRef<CycleStatus | null>(null)
+  // The caller's own advance, from the moment it is sent. Focus moves to the
+  // new mode's h2 once the call has succeeded AND the board shows its target,
+  // in whichever order the mutation, the refetch, and a Realtime event land.
+  // A stage change the caller did not make never moves focus.
+  const focusRequestRef = useRef<FocusRequest | null>(null)
+  // The status the page last rendered, for the case where the board already
+  // shows the target when the call resolves.
+  const shownStatusRef = useRef<CycleStatus | undefined>(undefined)
 
   const refetchInterval = polling ? BOARD_POLL_INTERVAL_MS : false
   const cycleQuery = useCycleQuery(cycleId, validId && !lostAccess, {
@@ -333,18 +348,30 @@ function BoardScreen({ cycleId }: { cycleId: string }) {
 
   const boardStatus = board?.status
   useEffect(() => {
-    if (boardStatus !== undefined && focusStageRef.current === boardStatus) {
-      focusStageRef.current = null
+    shownStatusRef.current = boardStatus
+    const request = focusRequestRef.current
+    if (request?.succeeded === true && request.target === boardStatus) {
+      focusRequestRef.current = null
       headingRef.current?.focus()
     }
   }, [boardStatus])
 
+  const onAdvanceStart = useCallback((target: CycleStatus) => {
+    focusRequestRef.current = { target, succeeded: false }
+  }, [])
+
   const onAdvanced = useCallback((target: CycleStatus) => {
-    focusStageRef.current = target
+    if (shownStatusRef.current === target) {
+      focusRequestRef.current = null
+      headingRef.current?.focus()
+    } else {
+      focusRequestRef.current = { target, succeeded: true }
+    }
   }, [])
 
   const onAdvanceFailed = useCallback(
     (code: CyclesErrorCode) => {
+      focusRequestRef.current = null
       if (code === 'not_project_member') {
         setLostAccess(true)
       } else if (code === 'not_project_facilitator') {
@@ -408,6 +435,7 @@ function BoardScreen({ cycleId }: { cycleId: string }) {
           board={board}
           isFacilitator={isFacilitator}
           headingRef={headingRef}
+          onAdvanceStart={onAdvanceStart}
           onAdvanced={onAdvanced}
           onAdvanceFailed={onAdvanceFailed}
         />

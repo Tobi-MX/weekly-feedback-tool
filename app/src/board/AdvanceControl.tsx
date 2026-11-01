@@ -38,7 +38,12 @@ export interface AdvanceControlProps {
   readonly cycleId: string
   /** The stage currently shown, which is the one the call leaves. */
   readonly from: AdvanceFromStatus
-  /** Called after the server moved the board, before the refetch lands. */
+  /** Called when the request is sent, before any answer or refetch. */
+  readonly onStart: () => void
+  /**
+   * Called after the call succeeded. The board's refetch (or a Realtime
+   * event) may already have rendered the new stage by then.
+   */
   readonly onAdvanced: () => void
   /** Called with the stable code when the call fails. */
   readonly onFailed: (code: CyclesErrorCode) => void
@@ -53,6 +58,7 @@ export interface AdvanceControlProps {
 export function AdvanceControl({
   cycleId,
   from,
+  onStart,
   onAdvanced,
   onFailed,
 }: AdvanceControlProps) {
@@ -85,6 +91,7 @@ export function AdvanceControl({
       return
     }
     pendingRef.current = true
+    onStart()
     mutation
       .mutateAsync(from)
       .then(() => {

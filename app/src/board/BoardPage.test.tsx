@@ -697,6 +697,92 @@ describe('advancing the stage', () => {
     expect(cyclesMock.advanceStage).toHaveBeenCalledTimes(1)
   })
 
+  async function confirmClustering(): Promise<void> {
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Start clustering' }),
+    )
+    fireEvent.click(
+      within(screen.getByRole('group')).getByRole('button', {
+        name: 'Start clustering',
+      }),
+    )
+    await waitFor(() => {
+      expect(cyclesMock.advanceStage).toHaveBeenCalledTimes(1)
+    })
+  }
+
+  it('focuses the new h2 when a Realtime-driven refetch renders the stage before the call resolves', async () => {
+    const pending = deferred<{ id: string; status: CycleStatus }>()
+    cyclesMock.advanceStage.mockReturnValue(pending.promise)
+    setup({ board: boardOf('reveal') })
+    await subscribed()
+    await confirmClustering()
+
+    // The stage change reaches the board first, through the channel.
+    boardMock.fetchCycleBoard.mockResolvedValue(boardOf('cluster'))
+    emitEvent()
+    const heading = await modeHeading('Cluster')
+    expect(heading).not.toHaveFocus()
+
+    await act(async () => {
+      pending.resolve({ id: CYCLE_ID, status: 'cluster' })
+      await pending.promise
+    })
+    await waitFor(() => {
+      expect(
+        screen.getByRole('heading', { level: 2, name: 'Cluster' }),
+      ).toHaveFocus()
+    })
+  })
+
+  it('focuses the new h2 when the board refetch lands only after the call resolved', async () => {
+    cyclesMock.advanceStage.mockResolvedValue({
+      id: CYCLE_ID,
+      status: 'cluster',
+    })
+    setup({ board: boardOf('reveal') })
+    await modeHeading('Reveal')
+    const refetch = deferred<CycleBoard | null>()
+    boardMock.fetchCycleBoard.mockReturnValue(refetch.promise)
+    await confirmClustering()
+    // The mutation waits for its invalidation, so release the refetch now.
+    expect(
+      screen.getByRole('heading', { level: 2, name: 'Reveal' }),
+    ).toBeInTheDocument()
+
+    await act(async () => {
+      refetch.resolve(boardOf('cluster'))
+      await refetch.promise
+    })
+    const heading = await modeHeading('Cluster')
+    await waitFor(() => {
+      expect(heading).toHaveFocus()
+    })
+  })
+
+  it('does not move focus when its own advance fails, even if another tab moved the stage', async () => {
+    const pending = deferred<{ id: string; status: CycleStatus }>()
+    cyclesMock.advanceStage.mockReturnValue(pending.promise)
+    setup({ board: boardOf('reveal') })
+    await subscribed()
+    await confirmClustering()
+
+    boardMock.fetchCycleBoard.mockResolvedValue(boardOf('cluster'))
+    emitEvent()
+    await modeHeading('Cluster')
+
+    await act(async () => {
+      pending.reject(new CyclesApiError('stage_out_of_date'))
+      await pending.promise.catch(() => undefined)
+    })
+    expect(
+      await screen.findByText('The stage has already changed.'),
+    ).toBeVisible()
+    expect(
+      screen.getByRole('heading', { level: 2, name: 'Cluster' }),
+    ).not.toHaveFocus()
+  })
+
   it('moves cluster to vote with its toast', async () => {
     cyclesMock.advanceStage.mockResolvedValue({ id: CYCLE_ID, status: 'vote' })
     setup({ board: boardOf('cluster') })
