@@ -597,7 +597,7 @@ select is(
   null,
   'neither the trigger function nor start_retrospective mentions cards, card_authors, is_anonymous, or profiles'
 );
-select is((select array_agg(p.proname::text order by p.proname) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.prosrc ~ 'card_authors'), array['create_card', 'delete_card', 'get_cycle_status', 'get_my_cards', 'update_card'], 'still only the four card RPCs and get_cycle_status in public mention card_authors');
+select is((select array_agg(p.proname::text order by p.proname) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.prosrc ~ 'card_authors'), array['create_card', 'delete_card', 'get_cycle_board', 'get_cycle_status', 'get_my_cards', 'update_card'], 'still only the four card RPCs, get_cycle_status, and get_cycle_board in public mention card_authors');
 
 -- ---------------------------------------------------------------------------
 -- P1: cards while collecting. Card writes add no event.
