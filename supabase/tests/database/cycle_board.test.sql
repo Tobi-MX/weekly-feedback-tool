@@ -257,7 +257,7 @@ declare
   returned uuid[];
   expected uuid[];
 begin
-  if board_test.keys(p_resp) is distinct from array['cards', 'cycle_id', 'is_revealed', 'status'] then
+  if board_test.keys(p_resp) is distinct from array['cards', 'clusters', 'cycle_id', 'is_revealed', 'status'] then
     result := result || 'top-level keys'::text;
   end if;
   if jsonb_typeof(p_resp -> 'cards') is distinct from 'array' then
@@ -453,7 +453,7 @@ select is(pg_get_function_result('public.get_cycle_board(uuid)'::regprocedure), 
 -- ---------------------------------------------------------------------------
 -- The function body: data scope, side channels, and RPC hardening.
 -- ---------------------------------------------------------------------------
-select is((select prosrc ~* '(clusters|cluster_cards|votes|voting_closed_at)' from pg_proc where oid = 'public.get_cycle_board(uuid)'::regprocedure), false, 'the body does not mention clusters, cluster_cards, votes, or voting_closed_at');
+select is((select prosrc ~* '(votes|voting_closed_at)' from pg_proc where oid = 'public.get_cycle_board(uuid)'::regprocedure), false, 'the body does not mention votes or voting_closed_at');
 select is((select prosrc ~ 'revealed_at' from pg_proc where oid = 'public.get_cycle_board(uuid)'::regprocedure), true, 'the body decides on revealed_at');
 select is((select prosrc ~* 'created_at' from pg_proc where oid = 'public.get_cycle_board(uuid)'::regprocedure), false, 'the body does not mention created_at');
 select is((select prosrc ~* 'updated_at' from pg_proc where oid = 'public.get_cycle_board(uuid)'::regprocedure), false, 'the body does not mention updated_at');
@@ -520,8 +520,8 @@ select is((select count(*)::int from pg_depend d join pg_rewrite r on r.oid = d.
 set local role authenticated;
 select is(
   board_test.board('A', 'P0'),
-  jsonb_build_object('cycle_id', board_test.id('P0'), 'status', 'collecting', 'is_revealed', false, 'cards', '[]'::jsonb),
-  'P0 collecting with no cards: A gets exactly the four keys and cards = []'
+  jsonb_build_object('cycle_id', board_test.id('P0'), 'status', 'collecting', 'is_revealed', false, 'cards', '[]'::jsonb, 'clusters', '[]'::jsonb),
+  'P0 collecting with no cards: A gets exactly the five keys, cards = [] and clusters = []'
 );
 select isnt(board_test.add_card('B', 'P0', 'start', 'B in P0', false), null, 'B adds an attributed card in P0');
 select is(
@@ -538,7 +538,7 @@ select is(board_test.problems('A', 'P0', board_test.board('A', 'P0')), '{}'::tex
 select is(board_test.problems('B', 'P0', board_test.board('B', 'P0')), '{}'::text[], 'P0 closed early: B''s board meets every rule');
 select is(board_test.problems('D', 'P0', board_test.board('D', 'P0')), '{}'::text[], 'P0 closed early: D''s board meets every rule');
 select is(board_test.problems('E', 'P0', board_test.board('E', 'P0')), '{}'::text[], 'P0 closed early: E''s board meets every rule');
-select is(board_test.board('A', 'P0') - 'cards', jsonb_build_object('cycle_id', board_test.id('P0'), 'status', 'closed', 'is_revealed', false), 'P0 closed early: status closed, is_revealed false');
+select is(board_test.board('A', 'P0') - 'cards', jsonb_build_object('cycle_id', board_test.id('P0'), 'status', 'closed', 'is_revealed', false, 'clusters', '[]'::jsonb), 'P0 closed early: status closed, is_revealed false');
 select is(jsonb_array_length(board_test.board('B', 'P0') -> 'cards'), 1, 'P0 closed early: B gets one card');
 select is(board_test.card_ids(board_test.board('B', 'P0')), array[board_test.id('B in P0')], 'P0 closed early: B''s one card is their own');
 select is(board_test.board('A', 'P0') -> 'cards', '[]'::jsonb, 'P0 closed early: A gets []');
@@ -658,7 +658,7 @@ select is(board_test.problems('A', 'P1', board_test.board('A', 'P1')), '{}'::tex
 select is(board_test.problems('B', 'P1', board_test.board('B', 'P1')), '{}'::text[], 'reveal: B''s board meets every rule');
 select is(board_test.problems('D', 'P1', board_test.board('D', 'P1')), '{}'::text[], 'reveal: D''s board meets every rule');
 select is(board_test.problems('E', 'P1', board_test.board('E', 'P1')), '{}'::text[], 'reveal: E''s board meets every rule');
-select is(board_test.board('B', 'P1') - 'cards', jsonb_build_object('cycle_id', board_test.id('P1'), 'status', 'reveal', 'is_revealed', true), 'reveal: status reveal, is_revealed true');
+select is(board_test.board('B', 'P1') - 'cards', jsonb_build_object('cycle_id', board_test.id('P1'), 'status', 'reveal', 'is_revealed', true, 'clusters', '[]'::jsonb), 'reveal: status reveal, is_revealed true');
 select is(jsonb_array_length(board_test.board('B', 'P1') -> 'cards'), 16, 'reveal: B gets all sixteen cards');
 select is(board_test.card_ids(board_test.board('D', 'P1')), board_test.all_ids('P1'), 'reveal: D''s ids are exactly the cycle''s cards in category, then id order');
 select is(board_test.forbidden(board_test.board('E', 'P1')), null, 'reveal: no created_at, updated_at, author_id, user_id, email, avatar_url, or revealed_at at any depth');
@@ -853,7 +853,7 @@ set local role authenticated;
 select is(board_test.problems('A', 'P1', board_test.board('A', 'P1')), '{}'::text[], 'closed after reveal: A''s board meets every rule');
 select is(board_test.problems('B', 'P1', board_test.board('B', 'P1')), '{}'::text[], 'closed after reveal: B''s board meets every rule');
 select is(board_test.problems('D', 'P1', board_test.board('D', 'P1')), '{}'::text[], 'closed after reveal: D''s board meets every rule');
-select is(board_test.board('A', 'P1') - 'cards', jsonb_build_object('cycle_id', board_test.id('P1'), 'status', 'closed', 'is_revealed', true), 'closed after reveal: status closed, is_revealed true');
+select is(board_test.board('A', 'P1') - 'cards', jsonb_build_object('cycle_id', board_test.id('P1'), 'status', 'closed', 'is_revealed', true, 'clusters', '[]'::jsonb), 'closed after reveal: status closed, is_revealed true');
 select is(board_test.board('A', 'P1') - 'status', board_test.snapped('discuss A') - 'status', 'closed after reveal: A''s board is otherwise unchanged');
 select is(board_test.board('B', 'P1') - 'status', board_test.snapped('discuss B') - 'status', 'closed after reveal: B''s board is otherwise unchanged');
 select ok(board_test.anon_cards(board_test.board('B', 'P1')) = board_test.anon_cards(board_test.board('A', 'P1')) and board_test.anon_cards(board_test.board('D', 'P1')) = board_test.anon_cards(board_test.board('A', 'P1')), 'closed after reveal: anonymous cards are equal for A, B, and D');
@@ -884,10 +884,10 @@ reset role;
 insert into public.feedback_cycles (id, project_id, title, week_start)
 values ('35000000-0000-4000-8000-000000000003', '25000000-0000-4000-8000-000000000001', 'P empty week', '2026-11-02');
 set local role authenticated;
-select is(board_test.board('A', 'P2'), jsonb_build_object('cycle_id', board_test.id('P2'), 'status', 'collecting', 'is_revealed', false, 'cards', '[]'::jsonb), 'P2 collecting: cards = []');
+select is(board_test.board('A', 'P2'), jsonb_build_object('cycle_id', board_test.id('P2'), 'status', 'collecting', 'is_revealed', false, 'cards', '[]'::jsonb, 'clusters', '[]'::jsonb), 'P2 collecting: cards = [] and clusters = []');
 set local request.jwt.claims = '{"sub":"15000000-0000-4000-8000-000000000002","role":"authenticated"}';
 select lives_ok($$ select * from public.start_retrospective('35000000-0000-4000-8000-000000000003') $$, 'facilitator B starts the retrospective on P2');
-select is(board_test.board('A', 'P2'), jsonb_build_object('cycle_id', board_test.id('P2'), 'status', 'reveal', 'is_revealed', true, 'cards', '[]'::jsonb), 'P2 revealed with zero cards: A gets cards = []');
+select is(board_test.board('A', 'P2'), jsonb_build_object('cycle_id', board_test.id('P2'), 'status', 'reveal', 'is_revealed', true, 'cards', '[]'::jsonb, 'clusters', '[]'::jsonb), 'P2 revealed with zero cards: A gets cards = [] and clusters = []');
 select is(board_test.board('D', 'P2') -> 'cards', '[]'::jsonb, 'P2 revealed with zero cards: D gets cards = []');
 select is(board_test.problems('B', 'P2', board_test.board('B', 'P2')), '{}'::text[], 'P2 revealed with zero cards: B''s board meets every rule');
 select is(board_test.denials('P2'), '{}'::text[], 'P2: every denied case gets exactly not_project_member');
