@@ -20,7 +20,10 @@ export const boardMock = {
   deleteCluster: vi.fn<(clusterId: string) => Promise<void>>(),
   mergeClusters:
     vi.fn<
-      (sourceClusterId: string, targetClusterId: string) => Promise<SavedCluster>
+      (
+        sourceClusterId: string,
+        targetClusterId: string,
+      ) => Promise<SavedCluster>
     >(),
   splitCluster:
     vi.fn<
