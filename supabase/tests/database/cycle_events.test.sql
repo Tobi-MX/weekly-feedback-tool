@@ -261,7 +261,9 @@ as $$
   select count(*)::int from public.cycle_events e where e.cycle_id = p_cycle;
 $$;
 
--- The cycle's events as "from>to:actor" in insert order, read as postgres.
+-- The cycle's events as "from>to:actor" in stage order, read as postgres.
+-- Every event in this transaction has the same created_at, and a cycle's
+-- stages only move forward, so from_status orders them.
 create function cycle_events_test.event_list(p_cycle uuid)
 returns text[]
 language sql
@@ -275,7 +277,7 @@ as $$
         (select i.label from cycle_events_test.ids i where i.id = e.actor_id and i.label in ('A', 'B', 'C', 'D')),
         'null'
       )
-      order by e.created_at, e.ctid
+      order by e.created_at, array_position(array['collecting', 'reveal', 'cluster', 'vote', 'discuss', 'closed'], e.from_status)
     ),
     '{}'::text[]
   )
@@ -283,7 +285,7 @@ as $$
   where e.cycle_id = p_cycle;
 $$;
 
--- The newest event of a cycle as jsonb, read as postgres.
+-- The latest event of a cycle (by stage) as jsonb, read as postgres.
 create function cycle_events_test.last_event(p_cycle uuid)
 returns jsonb
 language sql
@@ -294,7 +296,7 @@ as $$
   select to_jsonb(e)
   from public.cycle_events e
   where e.cycle_id = p_cycle
-  order by e.created_at desc, e.ctid desc
+  order by e.created_at desc, array_position(array['collecting', 'reveal', 'cluster', 'vote', 'discuss', 'closed'], e.from_status) desc
   limit 1;
 $$;
 
