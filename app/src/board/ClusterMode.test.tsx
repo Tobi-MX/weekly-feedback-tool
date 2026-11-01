@@ -326,12 +326,23 @@ describe('cluster mode layout', () => {
         .find((item) => item.textContent.includes('Continue demos'))
       expect(clustered).toHaveTextContent('StartStart writing ADRsAnonymous')
       expect(clustered.textContent).not.toMatch(/you/)
-      expect(ungroupedAnonymous?.innerHTML.replace('Continue demos', 'X')).toBe(
-        clustered.innerHTML
-          .replace('Start writing ADRs', 'X')
-          .replace('>Start<', '>Continue<'),
+      // The Move control is part of both items (#18); its text and the card
+      // id are the only differences besides the category.
+      expect(
+        normalizeIds(
+          (ungroupedAnonymous?.outerHTML ?? '')
+            .replaceAll('Continue demos', 'X')
+            .replaceAll(CARDS[1].cardId, 'ID'),
+        ),
+      ).toBe(
+        normalizeIds(
+          clustered.outerHTML
+            .replaceAll('Start writing ADRs', 'X')
+            .replaceAll(CARDS[2].cardId, 'ID')
+            .replace('>Start<', '>Continue<'),
+        ),
       )
-      html.push(clustered.outerHTML)
+      html.push(normalizeIds(clustered.outerHTML))
       view.unmount()
       queryClient.clear()
     }
