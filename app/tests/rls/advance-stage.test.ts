@@ -401,9 +401,6 @@ describe('advance_stage', () => {
     const received: RealtimePostgresInsertPayload<CycleEventRow>[] = []
     const channels: RealtimeChannel[] = []
     let resolveEvent: () => void = () => undefined
-    const gotEvent = new Promise<void>((resolve) => {
-      resolveEvent = resolve
-    })
 
     try {
       // SUBSCRIBED, then Realtime's own "Subscribed to PostgreSQL" system
@@ -456,6 +453,15 @@ describe('advance_stage', () => {
         READY_TIMEOUT_MS,
         'the channel was not ready within 30 s',
       )
+
+      // Under load Realtime can still deliver the collecting -> reveal event,
+      // committed before the subscription, after SUBSCRIBED. Let it drain,
+      // then count only what the advance produces.
+      await delay(QUIET_MS)
+      received.length = 0
+      const gotEvent = new Promise<void>((resolve) => {
+        resolveEvent = resolve
+      })
 
       await advanced(owner, cycleId, 'reveal', 'cluster')
 
