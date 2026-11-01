@@ -132,7 +132,8 @@ Audio/video transcription is delegated to a managed speech-to-text API. Running 
 **Anonymous feedback**
 
 - `cards` contains **no `author_id`**.
-- Authorship is stored in a separate `card_authors` table, readable only by the card's author.
+- Authorship is stored in a separate `card_authors` table that no client role can read: `anon`, `authenticated`, and `PUBLIC` have no privilege on it, and RLS is enabled with no policies. `cards` is locked down the same way.
+- Authors read their own cards through `get_my_cards`, which matches `card_authors.author_id = auth.uid()` inside the function, and write them only through `create_card`, `update_card`, and `delete_card` while the cycle is `collecting`. No card RPC takes a user id or returns an author id, and a card the caller did not write gets the same `card_not_found` error as a card that does not exist.
 - The board is loaded through `get_cycle_board`, which returns `is_mine` and, only for attributed cards after reveal, the author's display name. Anonymous cards never join to authorship.
 - The facilitator uses the same RPC and cannot retrieve anonymous authors in the product.
 
@@ -334,8 +335,8 @@ Rules:
 
 ## 8. Realtime
 
-- **Enabled:** `feedback_cycles` (stage), `cards`, `clusters`, `cluster_cards`, `cycle_events`.
-- **Not enabled:** `votes`, `card_authors`, `transcripts`, `extracted_items` drafts.
+- **Enabled:** `feedback_cycles` (stage), `clusters`, `cluster_cards`, `cycle_events`.
+- **Not enabled:** `cards`, `card_authors`, `votes`, `transcripts`, `extracted_items` drafts. No client role can read `cards` directly, so card changes reach other sessions through `cycle_events` (#14, #16) rather than through Realtime on `cards`.
 - Clients use TanStack Query with optimistic updates; Realtime events invalidate the relevant queries.
 - A polling fallback (3–5 seconds) is acceptable if Realtime proves unreliable. Realtime is not a hard MVP dependency.
 
