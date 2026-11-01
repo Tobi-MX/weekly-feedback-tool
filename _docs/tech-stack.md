@@ -137,6 +137,8 @@ Audio/video transcription is delegated to a managed speech-to-text API. Running 
 - The board is loaded through `get_cycle_board`, which shows only the caller's own cards until `revealed_at` is set and every card after. Attributed cards carry the author's display name and `is_mine`. Anonymous cards carry neither and are identical for every caller.
 - Card timestamps and creation order are visible only to the author; the board returns no timestamps and orders cards by category, then random card id.
 - The facilitator uses the same RPC and cannot retrieve anonymous authors in the product.
+- Clusters (#17) live in `clusters` and `cluster_cards`, which are default-deny like `cards` (RLS with no policies, no client privilege) and are written only through `create_cluster`, `rename_cluster`, and `delete_cluster`. Neither table has a creator, editor, or actor column. `get_cycle_board` returns them as one `clusters` key, `[]` before reveal and the same for every caller after; anonymous cards gain no key.
+- `cycle_events` also carries `clusters_changed` (#17): one row per changed cycle for every statement that changes `clusters` or `cluster_cards`, written by statement-level triggers. A CHECK requires `actor_id` null, `payload = '{}'`, and `from_status = to_status`, so who edited a cluster is never broadcast and an edit can never be tied to a card author.
 
 **Pre-reveal visibility**
 
@@ -208,11 +210,11 @@ Names are indicative; exact columns will be finalized with migrations.
 | `feedback_cycles` | Project, week/title, status, facilitator, reveal/close timestamps |
 | `cards` | Cycle, category (`start` / `stop` / `continue`), text, `is_anonymous` |
 | `card_authors` | Card → author mapping; self-only RLS; never exposed by the board RPC |
-| `clusters` | Cycle, name, sort order, source (`ai` / `manual`), discussion status |
-| `cluster_cards` | Cluster membership and ordering; absence means ungrouped |
+| `clusters` | `id`, `cycle_id`, `name` (trimmed, 1–100 characters, no control characters, unique per cycle ignoring case), `source` (`manual` / `ai`), `sort_order` (unique per cycle; new clusters are appended), `created_at`, `updated_at` (for operators only, never returned). No creator or editor column. At most 50 per cycle. The discussion status is not here yet: #25 adds it in its own migration |
+| `cluster_cards` | `cycle_id`, `cluster_id`, `card_id` (primary key: a card is in at most one cluster), `sort_order`. Composite foreign keys keep a card in a cluster of its own cycle; deleting a cluster or a card removes its rows. Absence means ungrouped. No actor column |
 | `votes` | Cycle, cluster, voter; up to 3 per voter, stackable |
 | `notes` | Cycle, optional cluster, author, text, timestamps |
-| `cycle_events` | Broadcast events for Realtime: `id`, `cycle_id`, `type` (`stage_changed` for now), `from_status`, `to_status`, `actor_id` (the user who changed the stage, or null), `payload` (`{}`), `created_at`. One row per status change, written only by a trigger on `feedback_cycles`; members of the cycle's project read it, nobody writes or updates it. It never holds card text, card ids, card or submission counts, author ids, per-member data, or vote data |
+| `cycle_events` | Broadcast events for Realtime: `id`, `cycle_id`, `type` (`stage_changed` or `clusters_changed`), `from_status`, `to_status`, `actor_id`, `payload` (`{}`), `created_at`. `stage_changed`: one row per status change, written by a trigger on `feedback_cycles`, with `actor_id` the user who changed the stage (or null). `clusters_changed` (#17): one row per changed cycle for each statement on `clusters` or `cluster_cards`, written by triggers on those tables, with `from_status = to_status` = the current status and `actor_id` always null. Only triggers write it; members of the cycle's project read it, nobody updates it. It never holds card text, card ids, cluster ids or names, counts, author ids, per-member data, or vote data |
 
 **Cycle statuses:** `collecting` → `reveal` → `cluster` → `vote` → `discuss` → `closed`.
 
@@ -247,11 +249,11 @@ All RPCs validate the caller's membership and the current cycle stage.
 
 | RPC | Purpose |
 |---|---|
-| `get_cycle_board` | Cards visible to the caller (own before reveal, all after), attributed author names, `is_mine` on attributed cards; clusters (#17) and own votes (#22) added later; never vote totals |
+| `get_cycle_board` | Cards visible to the caller (own before reveal, all after), attributed author names, `is_mine` on attributed cards; `clusters` (#17): `[]` before reveal, then every cluster by `sort_order` with exactly `cluster_id`, `name`, `source`, `card_ids` (by `cluster_cards.sort_order`, then `card_id`), the same for every caller; own votes (#22) added later; never vote totals |
 | `get_cycle_status` | One row: `cycle_id`, `status`, `is_revealed`, `member_count`, `submitted_member_count`, `my_card_count`, and `card_count` (null before reveal). Aggregate counts only — no ids, names, times, or card content. Voting status is left to #24 |
 | `create_card` | Own card during collecting; accepts `is_anonymous` per card |
 | `update_card` / `delete_card` | Own card, collecting stage only |
-| `create_cluster` / `rename_cluster` | During clustering |
+| `create_cluster` / `rename_cluster` / `delete_cluster` | Any member, `cluster` stage only; no role branch (the facilitator and the owner get nothing extra). Each locks the cycle row `FOR UPDATE`. Names are trimmed and must be 1–100 characters on one line and unique in the cycle ignoring case; at most 50 clusters. Renaming flips `source` to `manual`; renaming to the same name is a no-op. Deleting ungroups the cluster's cards. Errors: `not_project_member`, `cluster_not_found`, `cycle_not_clustering`, `invalid_cluster_name`, `cluster_name_taken`, `cluster_limit_reached`. They insert no event; #17's triggers record `clusters_changed` |
 | `move_card` | Move a card between clusters or to ungrouped |
 | `merge_clusters` / `split_cluster` | During clustering |
 | `cast_vote` / `remove_vote` | Voting stage; enforce max 3 total, stackable |
@@ -339,8 +341,8 @@ Rules:
 
 ## 8. Realtime
 
-- **Enabled:** `cycle_events` only, for now. Realtime applies its member-only select policy to each subscriber, and clients listen to `INSERT` only. `clusters` and `cluster_cards` are planned for #17–#19.
-- **Not enabled:** `feedback_cycles`, `cards`, `card_authors`, `votes`, `transcripts`, `extracted_items` drafts. Stage changes arrive through `cycle_events` (one `stage_changed` row per status change), not through Realtime on `feedback_cycles`. No client role can read `cards` directly, so card changes reach other sessions through `cycle_events` (#14, #16) rather than through Realtime on `cards`.
+- **Enabled:** `cycle_events` only. Realtime applies its member-only select policy to each subscriber, and clients listen to `INSERT` only.
+- **Not enabled:** `feedback_cycles`, `cards`, `card_authors`, `clusters`, `cluster_cards`, `votes`, `transcripts`, `extracted_items` drafts. Cluster changes (#17–#21) reach open boards through `clusters_changed` rows on `cycle_events`, written by triggers on the cluster tables, so the board needs no new channel. Stage changes arrive through `cycle_events` (one `stage_changed` row per status change), not through Realtime on `feedback_cycles`. No client role can read `cards` directly, so card changes reach other sessions through `cycle_events` (#14, #16) rather than through Realtime on `cards`.
 - A client that receives an event reads nothing from it and re-reads through the RPCs. It also re-reads every time its channel reports `SUBSCRIBED`, so an event missed while disconnected is caught up.
 - Clients use TanStack Query with optimistic updates; Realtime events invalidate the relevant queries.
 - A polling fallback (3–5 seconds) is acceptable if Realtime proves unreliable. Realtime is not a hard MVP dependency.
@@ -367,6 +369,7 @@ Rules:
 - Members see facilitator controls only if their role allows them: the caller's own `get_project_members` row must have `role = 'facilitator'`, never `owner_id`. Loading or failed members show no control.
 - Anonymous cards are always labeled "Anonymous" and carry no "you" marker, for their author too. Attributed cards show the author's name, with " (you)" on the caller's own.
 - One `cycle_events` channel per open board (#14's `useCycleEvents`). Every event and every `SUBSCRIBED` invalidates the board, cycle, and members queries. The page polls every 4 s only while Realtime is unavailable (`CHANNEL_ERROR`, `TIMED_OUT`, `CLOSED`), never while the tab is hidden, and shows a notice. A closed cycle and the not-found state hold no channel and never poll.
+- Cluster mode (#17) shows a "New cluster" form, an "Ungrouped (N)" section, and each cluster with Rename and Delete, the same for every member. Client validation mirrors the server's name rules and also refuses "Ungrouped". A refetch never overwrites a draft; a form whose cluster disappears closes and focus moves to the new-cluster input. "Start voting" shows the cluster and ungrouped-card counts first.
 - dnd-kit provides drag-and-drop with a keyboard-accessible "move to cluster" fallback.
 - Voting UI shows 3 remaining votes, allows stacking, and hides totals until close.
 - Discuss mode orders clusters by votes and lets the facilitator mark each topic.
@@ -505,7 +508,7 @@ At MVP scale, the dominant costs are engineering time, not infrastructure:
 2. **Attendance.** Is attendance entered manually by the facilitator, or derived from submissions/votes?
 3. **Invitations.** Slack/email integrations are out of scope. Is an invite link/code sufficient, or should Supabase Auth send email invites?
 4. **Multiple facilitators.** One facilitator per project, or can several members hold the role?
-5. **Cluster editing rights.** The plan says "the team" can move/merge/split. Confirm that all members, not just the facilitator, get these RPCs.
+5. **Cluster editing rights.** The plan says "the team" can move/merge/split. Answered for `create_cluster`, `rename_cluster`, and `delete_cluster` (#17): every current member, with no extra right or restriction for the facilitator or the owner. Still open for move, merge, and split (#18, #19).
 6. **Post-reveal card editing.** Cards are editable before the retrospective. Should they become read-only after reveal? (Recommended: yes.)
 7. **Notes visibility.** Are discussion notes visible to the whole team, or only the facilitator?
 8. **Media retention.** Delete uploaded audio/video after transcription, or retain for re-processing? For how long?
