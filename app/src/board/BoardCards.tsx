@@ -30,6 +30,8 @@ export interface ClusterCardItemProps {
   readonly dropLine?: 'before' | 'after' | null
   readonly onDragStart?: (event: DragEvent<HTMLLIElement>) => void
   readonly onDragEnd?: () => void
+  /** The split form's checkbox (#19), before the card's text. */
+  readonly selectControl?: ReactNode
 }
 
 /**
@@ -44,6 +46,7 @@ export function ClusterCardItem({
   dropLine = null,
   onDragStart,
   onDragEnd,
+  selectControl = null,
 }: ClusterCardItemProps) {
   return (
     <li
@@ -61,6 +64,7 @@ export function ClusterCardItem({
           'after:absolute after:inset-x-0 after:-bottom-1.5 after:h-0.5 after:rounded after:bg-primary',
       )}
     >
+      {selectControl}
       <div className="min-w-0 flex-1 space-y-1">
         <p className="text-xs font-medium text-muted-foreground">
           {cardCategoryLabel(card.category)}

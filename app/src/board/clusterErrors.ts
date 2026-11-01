@@ -13,12 +13,17 @@ export const CLUSTER_ERROR_CODES = [
   // #18: move_card.
   'card_not_found',
   'invalid_card_position',
+  // #19: merge_clusters and split_cluster.
+  'cannot_merge_into_self',
+  'invalid_card_selection',
+  'card_not_in_cluster',
+  'split_takes_all_cards',
 ] as const
 
 export type ClusterErrorCode = (typeof CLUSTER_ERROR_CODES)[number] | 'unknown'
 
 /** Which write failed; only the `unknown` copy depends on it. */
-export type ClusterOperation = 'save' | 'delete'
+export type ClusterOperation = 'save' | 'delete' | 'merge' | 'split'
 
 /** The board's toast copy for each server error. */
 export const CLUSTER_GONE_MESSAGE = 'This cluster no longer exists.'
@@ -31,6 +36,17 @@ export const LIMIT_REACHED_MESSAGE = 'This cycle already has 50 clusters.'
 export const SAVE_FAILED_MESSAGE = 'Could not save the cluster.'
 export const DELETE_FAILED_MESSAGE = 'Could not delete the cluster.'
 
+/** The toast copy for a failed merge or split (#19). */
+export const MERGE_SELF_MESSAGE = 'Choose a different cluster to merge into.'
+export const SELECTION_INVALID_MESSAGE =
+  'Select the cards to move to the new cluster.'
+export const CARD_NOT_IN_CLUSTER_MESSAGE =
+  'Some selected cards are no longer in this cluster. Check your selection and try again.'
+export const SPLIT_ALL_MESSAGE =
+  'Leave at least one card in the cluster. To rename it, use Rename.'
+export const MERGE_FAILED_MESSAGE = 'Could not merge the clusters.'
+export const SPLIT_FAILED_MESSAGE = 'Could not split the cluster.'
+
 /** The toast copy for a failed card move (#18). */
 export const CARD_GONE_MESSAGE = 'This card no longer exists.'
 export const MOVE_NOT_CLUSTERING_MESSAGE =
@@ -41,6 +57,13 @@ export const MOVE_FAILED_MESSAGE = 'Could not move the card.'
 export const NAME_REQUIRED_MESSAGE = 'Enter a cluster name.'
 export const NAME_TOO_LONG_MESSAGE = 'Use 100 characters or fewer.'
 export const NAME_UNGROUPED_MESSAGE = 'Choose a name other than Ungrouped.'
+
+const FAILED_MESSAGES: Record<ClusterOperation, string> = {
+  save: SAVE_FAILED_MESSAGE,
+  delete: DELETE_FAILED_MESSAGE,
+  merge: MERGE_FAILED_MESSAGE,
+  split: SPLIT_FAILED_MESSAGE,
+}
 
 /**
  * The toast for a failed write, or null for `not_project_member`, which
@@ -63,13 +86,19 @@ export function clusterErrorMessage(
       return NAME_TAKEN_MESSAGE
     case 'cluster_limit_reached':
       return LIMIT_REACHED_MESSAGE
+    case 'cannot_merge_into_self':
+      return MERGE_SELF_MESSAGE
+    case 'invalid_card_selection':
+      return SELECTION_INVALID_MESSAGE
+    case 'card_not_in_cluster':
+      return CARD_NOT_IN_CLUSTER_MESSAGE
+    case 'split_takes_all_cards':
+      return SPLIT_ALL_MESSAGE
     // move_card's codes; a cluster write never raises them.
     case 'card_not_found':
     case 'invalid_card_position':
     case 'unknown':
-      return operation === 'delete'
-        ? DELETE_FAILED_MESSAGE
-        : SAVE_FAILED_MESSAGE
+      return FAILED_MESSAGES[operation]
   }
 }
 
@@ -91,6 +120,10 @@ export function moveErrorMessage(code: ClusterErrorCode): string | null {
     case 'invalid_cluster_name':
     case 'cluster_name_taken':
     case 'cluster_limit_reached':
+    case 'cannot_merge_into_self':
+    case 'invalid_card_selection':
+    case 'card_not_in_cluster':
+    case 'split_takes_all_cards':
     case 'unknown':
       return MOVE_FAILED_MESSAGE
   }

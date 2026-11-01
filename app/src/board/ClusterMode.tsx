@@ -32,13 +32,23 @@ import {
   type MoveMenuItem,
 } from './cardMove'
 import {
+  MERGE_TARGET_GONE_MESSAGE,
+  mergeAnnouncement,
+  mergeOptionLabel,
+  mergeSummary,
+  pruneSplitSelection,
+  splitAnnouncement,
+  splitCheckboxLabel,
+  splitSelectionCount,
+  trimClusterName,
+  validateClusterName,
+  validateSplit,
+  type SplitError,
+} from './clusterEdits'
+import {
   clusterErrorCodeOf,
   clusterErrorMessage,
   moveErrorMessage,
-  NAME_REQUIRED_MESSAGE,
-  NAME_TAKEN_MESSAGE,
-  NAME_TOO_LONG_MESSAGE,
-  NAME_UNGROUPED_MESSAGE,
   type ClusterErrorCode,
   type ClusterOperation,
 } from './clusterErrors'
@@ -46,58 +56,30 @@ import { MoveMenu, useFinePointer } from './MoveMenu'
 import {
   useCreateCluster,
   useDeleteCluster,
+  useMergeClusters,
   useMoveCard,
   useRenameCluster,
+  useSplitCluster,
 } from './useClusters'
 
 export const CLUSTER_INTRO =
   'Group related cards into clusters. Everyone in the project can add, rename and delete clusters until voting starts.'
-
-const MAX_NAME_LENGTH = 100
 
 const inputClass = cn(
   'block h-9 w-full min-w-0 rounded-md border border-input bg-background px-3 py-1 text-sm aria-invalid:border-destructive',
   focusRing,
 )
 
-/** The server's trim set: space, tab, line feed, carriage return. */
-export function trimClusterName(raw: string): string {
-  return raw.replace(/^[ \t\n\r]+|[ \t\n\r]+$/g, '')
-}
-
 /**
- * The client's check of a name against the current board, mirroring the
- * server's rules, plus "Ungrouped". Returns the trimmed name or the inline
- * message. `ownId` is the cluster being renamed, whose own name does not
- * count as taken.
+ * Wraps a 100-character name with no spaces anywhere instead of overflowing
+ * a 375 px screen. No `break-words`, which would win over it.
  */
-export function validateClusterName(
-  raw: string,
-  clusters: readonly BoardCluster[],
-  ownId?: string,
-): { readonly name: string } | { readonly error: string } {
-  const name = trimClusterName(raw)
-  if (name === '') {
-    return { error: NAME_REQUIRED_MESSAGE }
-  }
-  // Code points, as the server's char_length counts them.
-  if ([...name].length > MAX_NAME_LENGTH) {
-    return { error: NAME_TOO_LONG_MESSAGE }
-  }
-  const lower = name.toLowerCase()
-  if (
-    clusters.some(
-      (cluster) =>
-        cluster.clusterId !== ownId && cluster.name.toLowerCase() === lower,
-    )
-  ) {
-    return { error: NAME_TAKEN_MESSAGE }
-  }
-  if (lower === 'ungrouped') {
-    return { error: NAME_UNGROUPED_MESSAGE }
-  }
-  return { name }
-}
+const wrapAnywhere = 'min-w-0 [overflow-wrap:anywhere]'
+
+const selectClass = cn(
+  'block h-9 w-full max-w-full min-w-0 truncate rounded-md border border-input bg-background px-3 py-1 text-sm',
+  focusRing,
+)
 
 /** The form a cluster has open: at most one on the board at a time. */
 type OpenForm =
@@ -108,15 +90,58 @@ type OpenForm =
       readonly error: string | null
     }
   | { readonly kind: 'delete'; readonly clusterId: string }
+  | {
+      readonly kind: 'merge'
+      /** The source: the cluster that is merged away. */
+      readonly clusterId: string
+      /** The chosen target, by id, so a rename keeps the choice. */
+      readonly targetId: string
+      /** The chosen target disappeared and the choice was reset. */
+      readonly targetGone: boolean
+    }
+  | {
+      readonly kind: 'split'
+      readonly clusterId: string
+      /** The checked cards; it exists only while the form is open. */
+      readonly selected: readonly string[]
+      readonly draft: string
+      readonly error: SplitError | null
+    }
 
 /** Where focus goes after the next render. */
 type FocusTarget =
   | { readonly kind: 'new-input' }
   | {
       readonly kind:
-        'rename-button' | 'delete-button' | 'rename-input' | 'delete-cancel'
+        | 'rename-button'
+        | 'delete-button'
+        | 'merge-button'
+        | 'split-button'
+        | 'rename-input'
+        | 'delete-cancel'
+        | 'merge-select'
+        | 'split-checkbox'
       readonly clusterId: string
     }
+
+/** The button that opened each form, where Escape and Cancel return. */
+const OPENER: Record<OpenForm['kind'], FocusTarget['kind']> = {
+  rename: 'rename-button',
+  delete: 'delete-button',
+  merge: 'merge-button',
+  split: 'split-button',
+}
+
+/** A merge or split request in flight, and the form that sent it. */
+interface BusyForm {
+  readonly kind: 'merge' | 'split'
+  readonly clusterId: string
+}
+
+/** A cluster whose Rename button gets focus once the board shows it. */
+interface SuccessFocus {
+  readonly clusterId: string
+}
 
 function focusSelector(target: FocusTarget): string | null {
   return target.kind === 'new-input'
@@ -202,7 +227,11 @@ interface DropTargetProps {
 
 function InlineError({ id, text }: { id: string; text: string }) {
   return (
-    <p id={id} role="alert" className="text-sm text-destructive">
+    <p
+      id={id}
+      role="alert"
+      className={cn('text-sm text-destructive', wrapAnywhere)}
+    >
       {text}
     </p>
   )
@@ -211,18 +240,34 @@ function InlineError({ id, text }: { id: string; text: string }) {
 interface ClusterSectionProps {
   readonly cluster: BoardCluster
   readonly cards: readonly BoardCard[]
-  readonly renderCard: (card: BoardCard, index: number) => ReactNode
+  readonly renderCard: (
+    card: BoardCard,
+    index: number,
+    selectControl: ReactNode,
+  ) => ReactNode
   readonly dropTarget: DropTargetProps
   readonly dropActive: boolean
   readonly form: OpenForm | null
+  /** Every other cluster in board order: the merge targets. */
+  readonly otherClusters: readonly BoardCluster[]
   readonly renamePending: boolean
   readonly deletePending: boolean
+  readonly mergePending: boolean
+  readonly splitPending: boolean
+  /** A card move is pending: merge and split submit do nothing. */
+  readonly writeBlocked: boolean
   readonly onOpenRename: () => void
   readonly onOpenDelete: () => void
+  readonly onOpenMerge: () => void
+  readonly onOpenSplit: () => void
   readonly onDraftChange: (draft: string) => void
   readonly onCancel: () => void
   readonly onSaveRename: () => void
   readonly onConfirmDelete: () => void
+  readonly onTargetChange: (targetId: string) => void
+  readonly onConfirmMerge: () => void
+  readonly onToggleCard: (cardId: string) => void
+  readonly onSubmitSplit: () => void
 }
 
 function ClusterSection({
@@ -232,20 +277,37 @@ function ClusterSection({
   dropTarget,
   dropActive,
   form,
+  otherClusters,
   renamePending,
   deletePending,
+  mergePending,
+  splitPending,
+  writeBlocked,
   onOpenRename,
   onOpenDelete,
+  onOpenMerge,
+  onOpenSplit,
   onDraftChange,
   onCancel,
   onSaveRename,
   onConfirmDelete,
+  onTargetChange,
+  onConfirmMerge,
+  onToggleCard,
+  onSubmitSplit,
 }: ClusterSectionProps) {
   const baseId = useId()
   const headingId = `${baseId}-heading`
   const inputId = `${baseId}-name`
   const errorId = `${baseId}-error`
+  const selectId = `${baseId}-merge-target`
+  const goneId = `${baseId}-merge-gone`
+  const splitInputId = `${baseId}-split-name`
+  const splitCountId = `${baseId}-split-count`
+  const splitErrorId = `${baseId}-split-error`
   const { clusterId, name } = cluster
+  const splitForm = form?.kind === 'split' ? form : null
+  const selected = new Set(splitForm?.selected ?? [])
 
   const onEscape = (pending: boolean) => (event: KeyboardEvent) => {
     if (event.key === 'Escape' && !pending) {
@@ -338,6 +400,137 @@ function ClusterSection({
         </div>
       </div>
     )
+  } else if (form?.kind === 'merge') {
+    const target =
+      otherClusters.find((other) => other.clusterId === form.targetId) ?? null
+    controls = (
+      <div
+        role="group"
+        aria-label={`Merge cluster ${name}`}
+        data-cluster-form={`merge:${clusterId}`}
+        className="min-w-0 space-y-3 rounded-md border p-3"
+        onKeyDown={onEscape(mergePending)}
+      >
+        <div className="min-w-0 space-y-1">
+          <label
+            htmlFor={selectId}
+            className={cn('block text-sm font-medium', wrapAnywhere)}
+          >
+            Merge into
+          </label>
+          <select
+            id={selectId}
+            value={form.targetId}
+            data-cluster-focus={`merge-select:${clusterId}`}
+            aria-describedby={form.targetGone ? goneId : undefined}
+            className={selectClass}
+            onChange={(event) => {
+              onTargetChange(event.target.value)
+            }}
+          >
+            {otherClusters.map((other) => (
+              <option
+                key={other.clusterId}
+                value={other.clusterId}
+                className="[overflow-wrap:anywhere] whitespace-normal"
+              >
+                {mergeOptionLabel(other)}
+              </option>
+            ))}
+          </select>
+        </div>
+        {form.targetGone ? (
+          <InlineError id={goneId} text={MERGE_TARGET_GONE_MESSAGE} />
+        ) : null}
+        {target === null ? null : (
+          <p className={cn('text-sm', wrapAnywhere)}>
+            {mergeSummary(cluster, target)}
+          </p>
+        )}
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            disabled={mergePending}
+            onClick={onCancel}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            disabled={mergePending}
+            aria-disabled={writeBlocked ? 'true' : undefined}
+            className="aria-disabled:opacity-50"
+            onClick={onConfirmMerge}
+          >
+            {mergePending ? 'Merging…' : 'Merge clusters'}
+          </Button>
+        </div>
+      </div>
+    )
+  } else if (splitForm !== null) {
+    const nameError = splitForm.error?.field === 'name'
+    controls = (
+      <form
+        aria-label={`Split cluster ${name}`}
+        data-cluster-form={`split:${clusterId}`}
+        noValidate
+        className="min-w-0 space-y-2 rounded-md border p-3"
+        onKeyDown={onEscape(splitPending)}
+        onSubmit={(event: FormEvent) => {
+          event.preventDefault()
+          onSubmitSplit()
+        }}
+      >
+        <label
+          htmlFor={splitInputId}
+          className={cn('block text-sm font-medium', wrapAnywhere)}
+        >
+          New cluster name
+        </label>
+        <input
+          id={splitInputId}
+          type="text"
+          autoComplete="off"
+          value={splitForm.draft}
+          aria-invalid={nameError ? 'true' : undefined}
+          aria-describedby={nameError ? splitErrorId : undefined}
+          className={inputClass}
+          onChange={(event) => {
+            onDraftChange(event.target.value)
+          }}
+        />
+        <p id={splitCountId} className="text-sm text-muted-foreground">
+          {splitSelectionCount(splitForm.selected.length, cards.length)}
+        </p>
+        {splitForm.error === null ? null : (
+          <InlineError id={splitErrorId} text={splitForm.error.message} />
+        )}
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            disabled={splitPending}
+            onClick={onCancel}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="submit"
+            disabled={splitPending}
+            aria-disabled={writeBlocked ? 'true' : undefined}
+            aria-describedby={
+              splitForm.error === null
+                ? splitCountId
+                : `${splitCountId} ${splitErrorId}`
+            }
+            className="aria-disabled:opacity-50"
+          >
+            {splitPending ? 'Splitting…' : 'Split into new cluster'}
+          </Button>
+        </div>
+      </form>
+    )
   } else if (form === null) {
     controls = (
       <div className="flex flex-wrap gap-2">
@@ -361,6 +554,30 @@ function ClusterSection({
         >
           Delete
         </Button>
+        {otherClusters.length === 0 ? null : (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            aria-label={`Merge cluster ${name}`}
+            data-cluster-focus={`merge-button:${clusterId}`}
+            onClick={onOpenMerge}
+          >
+            Merge
+          </Button>
+        )}
+        {cards.length < 2 ? null : (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            aria-label={`Split cluster ${name}`}
+            data-cluster-focus={`split-button:${clusterId}`}
+            onClick={onOpenSplit}
+          >
+            Split
+          </Button>
+        )}
       </div>
     )
   }
@@ -387,7 +604,28 @@ function ClusterSection({
           data-drop-list=""
           className="space-y-2"
         >
-          {cards.map((card, index) => renderCard(card, index))}
+          {cards.map((card, index) =>
+            renderCard(
+              card,
+              index,
+              splitForm === null ? null : (
+                <input
+                  type="checkbox"
+                  aria-label={splitCheckboxLabel(card)}
+                  checked={selected.has(card.cardId)}
+                  data-split-of={clusterId}
+                  data-cluster-focus={
+                    index === 0 ? `split-checkbox:${clusterId}` : undefined
+                  }
+                  className={cn('size-6 shrink-0 accent-primary', focusRing)}
+                  onChange={() => {
+                    onToggleCard(card.cardId)
+                  }}
+                  onKeyDown={onEscape(splitPending)}
+                />
+              ),
+            ),
+          )}
         </ul>
       )}
       {controls}
@@ -431,6 +669,11 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
   const createMutation = useCreateCluster(cycleId)
   const renameMutation = useRenameCluster(cycleId)
   const deleteMutation = useDeleteCluster(cycleId)
+  const mergeMutation = useMergeClusters(cycleId)
+  const splitMutation = useSplitCluster(cycleId)
+  // One board write at a time: while a merge or split is pending, no card
+  // moves; while a move is pending, merge and split send nothing.
+  const clusterWritePending = mergeMutation.isPending || splitMutation.isPending
 
   const [newDraft, setNewDraft] = useState('')
   const [newError, setNewError] = useState<string | null>(null)
@@ -453,19 +696,63 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
   const [drag, setDrag] = useState<DragState | null>(null)
   const renamePendingRef = useRef(false)
   const deletePendingRef = useRef(false)
+  const mergePendingRef = useRef(false)
+  const splitPendingRef = useRef(false)
+  // The form whose merge or split is in flight. Its refetched board may
+  // already show the result (the source gone, the cluster down to one card)
+  // before the request settles; the form's own success handles that, so the
+  // refetch rules below wait for it.
+  const [busyForm, setBusyForm] = useState<BusyForm | null>(null)
+  const [successFocus, setSuccessFocus] = useState<SuccessFocus | null>(null)
+  const handledSuccessFocusRef = useRef<SuccessFocus | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const newInputRef = useRef<HTMLInputElement>(null)
   const newInputId = useId()
   const newErrorId = useId()
 
-  // The cluster whose form is open disappeared from the refreshed board (a
-  // delete by anyone): close the form and move focus to the new-cluster input.
-  if (
+  const formBusy =
     openForm !== null &&
-    !clusters.some((cluster) => cluster.clusterId === openForm.clusterId)
-  ) {
-    setOpenForm(null)
-    setFocusTarget({ kind: 'new-input' })
+    busyForm !== null &&
+    busyForm.kind === openForm.kind &&
+    busyForm.clusterId === openForm.clusterId
+  if (openForm !== null && !formBusy) {
+    const own = clusters.find(
+      (cluster) => cluster.clusterId === openForm.clusterId,
+    )
+    if (own === undefined) {
+      // The cluster whose form is open disappeared from the refreshed board
+      // (a delete or merge by anyone): close the form and move focus to the
+      // new-cluster input.
+      setOpenForm(null)
+      setFocusTarget({ kind: 'new-input' })
+    } else if (openForm.kind === 'merge') {
+      const others = clusters.filter(
+        (cluster) => cluster.clusterId !== own.clusterId,
+      )
+      if (others.length === 0) {
+        setOpenForm(null)
+        setFocusTarget({ kind: 'new-input' })
+      } else if (
+        !others.some((cluster) => cluster.clusterId === openForm.targetId)
+      ) {
+        setOpenForm({
+          ...openForm,
+          targetId: others[0].clusterId,
+          targetGone: true,
+        })
+      }
+    } else if (openForm.kind === 'split') {
+      if (own.cardIds.length < 2) {
+        setOpenForm(null)
+        setFocusTarget({ kind: 'rename-button', clusterId: own.clusterId })
+      } else {
+        // A selected card that left drops out; one that arrived is unchecked.
+        const pruned = pruneSplitSelection(own, openForm.selected)
+        if (pruned.length !== openForm.selected.length) {
+          setOpenForm({ ...openForm, selected: pruned })
+        }
+      }
+    }
   }
 
   // Another member moved the card whose menu is open: close the menu, send
@@ -514,6 +801,29 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
       ?.focus()
   }, [moveFocus, displayed])
 
+  // After a merge or split, focus the target's or new cluster's Rename button
+  // once the refetched board shows it, and only if focus was still in the
+  // form that started it or on <body> (#94's rule).
+  useEffect(() => {
+    if (
+      successFocus === null ||
+      handledSuccessFocusRef.current === successFocus
+    ) {
+      return
+    }
+    const button = rootRef.current?.querySelector<HTMLElement>(
+      `[data-cluster-focus="rename-button:${successFocus.clusterId}"]`,
+    )
+    if (button === null || button === undefined) {
+      return
+    }
+    handledSuccessFocusRef.current = successFocus
+    const active = document.activeElement
+    if (active === null || active === document.body) {
+      button.focus()
+    }
+  }, [successFocus, clusters])
+
   useEffect(() => {
     if (focusTarget === null) {
       return
@@ -538,7 +848,12 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
 
   /** One move at a time, through move_card only; a no-op sends nothing. */
   const startMove = (move: CardMove) => {
-    if (movePendingRef.current || isNoOpMove(displayed, move)) {
+    if (
+      movePendingRef.current ||
+      mergePendingRef.current ||
+      splitPendingRef.current ||
+      isNoOpMove(displayed, move)
+    ) {
       return
     }
     movePendingRef.current = true
@@ -574,7 +889,12 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
 
   const dropHandlers: DropTargetProps = {
     onDragOver: (event) => {
-      if (!carriesCard(event) || movePendingRef.current) {
+      if (
+        !carriesCard(event) ||
+        movePendingRef.current ||
+        mergePendingRef.current ||
+        splitPendingRef.current
+      ) {
         return
       }
       const { over, clusterId } = targetOf(event)
@@ -623,11 +943,12 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
     },
   }
 
-  const canDrag = finePointer && !mover.isPending
+  const canDrag = finePointer && !mover.isPending && !clusterWritePending
 
   const renderCard = (
     card: BoardCard,
     dropLine: 'before' | 'after' | null = null,
+    selectControl: ReactNode = null,
   ) => {
     const items: readonly MoveMenuItem[] = moveMenuItems(displayed, card.cardId)
     return (
@@ -636,8 +957,13 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
         card={card}
         draggable={canDrag}
         dropLine={dropLine}
+        selectControl={selectControl}
         onDragStart={(event) => {
-          if (movePendingRef.current) {
+          if (
+            movePendingRef.current ||
+            mergePendingRef.current ||
+            splitPendingRef.current
+          ) {
             event.preventDefault()
             return
           }
@@ -656,7 +982,7 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
               label={moveButtonLabel(card)}
               items={items}
               open={openMenu?.cardId === card.cardId}
-              blocked={mover.isPending}
+              blocked={mover.isPending || clusterWritePending}
               onOpenChange={(open) => {
                 if (open) {
                   // A focus request left over from a move must not pull focus
@@ -751,12 +1077,149 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
     setFocusTarget({ kind: 'delete-cancel', clusterId: cluster.clusterId })
   }
 
+  const openMerge = (cluster: BoardCluster) => {
+    const first = clusters.find(
+      (other) => other.clusterId !== cluster.clusterId,
+    )
+    if (first === undefined) {
+      return
+    }
+    setOpenForm({
+      kind: 'merge',
+      clusterId: cluster.clusterId,
+      targetId: first.clusterId,
+      targetGone: false,
+    })
+    setFocusTarget({ kind: 'merge-select', clusterId: cluster.clusterId })
+  }
+
+  const openSplit = (cluster: BoardCluster) => {
+    setOpenForm({
+      kind: 'split',
+      clusterId: cluster.clusterId,
+      selected: [],
+      draft: '',
+      error: null,
+    })
+    setFocusTarget({ kind: 'split-checkbox', clusterId: cluster.clusterId })
+  }
+
   const cancel = (form: OpenForm) => {
     setOpenForm(null)
-    setFocusTarget({
-      kind: form.kind === 'rename' ? 'rename-button' : 'delete-button',
-      clusterId: form.clusterId,
-    })
+    setFocusTarget({ kind: OPENER[form.kind], clusterId: form.clusterId })
+  }
+
+  /** Whether focus is still in the form that started a merge or split. */
+  const focusInForm = (kind: BusyForm['kind'], clusterId: string) => {
+    const active = document.activeElement
+    if (active === null || active === document.body) {
+      return true
+    }
+    return (
+      active.closest(`[data-cluster-form="${kind}:${clusterId}"]`) !== null ||
+      (kind === 'split' &&
+        active.closest(`[data-split-of="${clusterId}"]`) !== null)
+    )
+  }
+
+  const confirmMerge = (cluster: BoardCluster, form: OpenForm) => {
+    if (
+      form.kind !== 'merge' ||
+      mergePendingRef.current ||
+      movePendingRef.current
+    ) {
+      return
+    }
+    const { clusterId, name: sourceName } = cluster
+    const target = clusters.find(
+      (other) =>
+        other.clusterId === form.targetId && other.clusterId !== clusterId,
+    )
+    if (target === undefined) {
+      return
+    }
+    mergePendingRef.current = true
+    setBusyForm({ kind: 'merge', clusterId })
+    mergeMutation
+      .mutateAsync({
+        sourceClusterId: clusterId,
+        targetClusterId: target.clusterId,
+      })
+      .then((saved) => {
+        const keepFocus = focusInForm('merge', clusterId)
+        setBusyForm(null)
+        closeFormOf('merge', clusterId)
+        setAnnouncement(mergeAnnouncement(sourceName, saved.name))
+        if (keepFocus) {
+          setSuccessFocus({ clusterId: saved.clusterId })
+        }
+      })
+      .catch((error: unknown) => {
+        setBusyForm(null)
+        const code = reportError(error, 'merge')
+        if (code === 'cycle_not_clustering') {
+          closeFormOf('merge', clusterId)
+        }
+      })
+      .finally(() => {
+        mergePendingRef.current = false
+      })
+  }
+
+  const toggleCard = (
+    cluster: BoardCluster,
+    form: OpenForm,
+    cardId: string,
+  ) => {
+    if (form.kind !== 'split') {
+      return
+    }
+    const next = form.selected.includes(cardId)
+      ? form.selected.filter((id) => id !== cardId)
+      : pruneSplitSelection(cluster, [...form.selected, cardId])
+    setOpenForm({ ...form, selected: next, error: null })
+  }
+
+  const submitSplit = (cluster: BoardCluster, form: OpenForm) => {
+    if (
+      form.kind !== 'split' ||
+      splitPendingRef.current ||
+      movePendingRef.current
+    ) {
+      return
+    }
+    const { clusterId } = cluster
+    const checked = validateSplit(cluster, form.selected, form.draft, clusters)
+    if ('error' in checked) {
+      setOpenForm({ ...form, error: checked.error })
+      return
+    }
+    // The cluster's displayed order, never the order the boxes were checked.
+    const cardIds = pruneSplitSelection(cluster, form.selected)
+    setOpenForm({ ...form, error: null })
+    splitPendingRef.current = true
+    setBusyForm({ kind: 'split', clusterId })
+    splitMutation
+      .mutateAsync({ clusterId, cardIds, name: checked.name })
+      .then((saved) => {
+        const keepFocus = focusInForm('split', clusterId)
+        setBusyForm(null)
+        closeFormOf('split', clusterId)
+        setAnnouncement(splitAnnouncement(cardIds.length, saved.name))
+        if (keepFocus) {
+          setSuccessFocus({ clusterId: saved.clusterId })
+        }
+      })
+      .catch((error: unknown) => {
+        setBusyForm(null)
+        const code = reportError(error, 'split')
+        if (code === 'cycle_not_clustering') {
+          closeFormOf('split', clusterId)
+        }
+      })
+      .finally(() => {
+        splitPendingRef.current = false
+      })
   }
 
   const saveRename = (cluster: BoardCluster, form: OpenForm) => {
@@ -912,7 +1375,7 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
                 key={cluster.clusterId}
                 cluster={cluster}
                 cards={cards}
-                renderCard={(card, index) => {
+                renderCard={(card, index, selectControl) => {
                   let line: 'before' | 'after' | null = null
                   if (drag?.over === cluster.clusterId && drag.index !== null) {
                     if (drag.index === index) {
@@ -924,21 +1387,33 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
                       line = 'after'
                     }
                   }
-                  return renderCard(card, line)
+                  return renderCard(card, line, selectControl)
                 }}
                 dropTarget={dropHandlers}
                 dropActive={drag?.over === cluster.clusterId}
                 form={form}
+                otherClusters={clusters.filter(
+                  (other) => other.clusterId !== cluster.clusterId,
+                )}
                 renamePending={renameMutation.isPending}
                 deletePending={deleteMutation.isPending}
+                mergePending={mergeMutation.isPending}
+                splitPending={splitMutation.isPending}
+                writeBlocked={mover.isPending}
                 onOpenRename={() => {
                   openRename(cluster)
                 }}
                 onOpenDelete={() => {
                   openDelete(cluster)
                 }}
+                onOpenMerge={() => {
+                  openMerge(cluster)
+                }}
+                onOpenSplit={() => {
+                  openSplit(cluster)
+                }}
                 onDraftChange={(draft) => {
-                  if (form?.kind === 'rename') {
+                  if (form?.kind === 'rename' || form?.kind === 'split') {
                     setOpenForm({ ...form, draft, error: null })
                   }
                 }}
@@ -954,6 +1429,26 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
                 }}
                 onConfirmDelete={() => {
                   confirmDelete(cluster)
+                }}
+                onTargetChange={(targetId) => {
+                  if (form?.kind === 'merge') {
+                    setOpenForm({ ...form, targetId, targetGone: false })
+                  }
+                }}
+                onConfirmMerge={() => {
+                  if (form !== null) {
+                    confirmMerge(cluster, form)
+                  }
+                }}
+                onToggleCard={(cardId) => {
+                  if (form !== null) {
+                    toggleCard(cluster, form, cardId)
+                  }
+                }}
+                onSubmitSplit={() => {
+                  if (form !== null) {
+                    submitSplit(cluster, form)
+                  }
                 }}
               />
             )

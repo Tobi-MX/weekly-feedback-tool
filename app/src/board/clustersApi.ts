@@ -3,7 +3,10 @@ import { supabase } from '@/auth/supabaseClient'
 import { ClustersApiError, toClusterErrorCode } from './clusterErrors'
 import { CLUSTER_SOURCES, type ClusterSource } from './clusterSource'
 
-/** The row `create_cluster` and `rename_cluster` return. */
+/**
+ * The row `create_cluster`, `rename_cluster`, `merge_clusters` (the target)
+ * and `split_cluster` (the new cluster) return.
+ */
 export interface SavedCluster {
   readonly clusterId: string
   readonly name: string
@@ -26,7 +29,13 @@ interface DbResult {
 
 /** Calls an RPC once and keeps only the stable error code on failure. */
 async function callRpc(
-  name: 'create_cluster' | 'rename_cluster' | 'delete_cluster' | 'move_card',
+  name:
+    | 'create_cluster'
+    | 'rename_cluster'
+    | 'delete_cluster'
+    | 'move_card'
+    | 'merge_clusters'
+    | 'split_cluster',
   args: Record<string, unknown>,
 ): Promise<unknown> {
   if (!supabase) {
@@ -44,7 +53,7 @@ async function callRpc(
   return result.data
 }
 
-/** The one row of a create or rename, or `unknown` when it does not parse. */
+/** The one row of a write, or `unknown` when it does not parse. */
 function parseClusterRow(data: unknown): SavedCluster {
   const parsed = z.array(clusterRowSchema).length(1).safeParse(data)
   if (!parsed.success) {
@@ -98,4 +107,39 @@ export async function moveCard(
     p_cluster_id: clusterId,
     p_position: position,
   })
+}
+
+/**
+ * Merges the source cluster into the target (#19): the source's cards go to
+ * the end of the target and the source is deleted. Returns the target.
+ */
+export async function mergeClusters(
+  sourceClusterId: string,
+  targetClusterId: string,
+): Promise<SavedCluster> {
+  return parseClusterRow(
+    await callRpc('merge_clusters', {
+      p_source_cluster_id: sourceClusterId,
+      p_target_cluster_id: targetClusterId,
+    }),
+  )
+}
+
+/**
+ * Splits the given cards of a cluster into a new manual cluster with the
+ * given name (#19). The server keeps the cards' order in the cluster, trims
+ * the name and applies every name rule. Returns the new cluster.
+ */
+export async function splitCluster(
+  clusterId: string,
+  cardIds: readonly string[],
+  name: string,
+): Promise<SavedCluster> {
+  return parseClusterRow(
+    await callRpc('split_cluster', {
+      p_cluster_id: clusterId,
+      p_card_ids: cardIds,
+      p_name: name,
+    }),
+  )
 }
