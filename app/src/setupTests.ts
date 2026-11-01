@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { afterEach, beforeEach, vi } from 'vitest'
 import { queryClient } from './lib/queryClient'
 import { resetAuthMock } from './test/authMock'
+import { resetBoardMock } from './test/boardMock'
 import { resetCardsMock } from './test/cardsMock'
 import { resetCyclesMock } from './test/cyclesMock'
 import { resetMembersMock } from './test/membersMock'
@@ -52,6 +53,13 @@ vi.mock('./cards/cardsApi', async () => {
   return mock
 })
 
+// The board read uses the same pattern, so board tests never reach the
+// network.
+vi.mock('./board/boardApi', async () => {
+  const { boardMock: mock } = await import('./test/boardMock')
+  return mock
+})
+
 // jsdom lacks a few browser APIs that Radix and sonner feature-detect.
 if (typeof globalThis.ResizeObserver === 'undefined') {
   globalThis.ResizeObserver = class ResizeObserver {
@@ -91,6 +99,7 @@ beforeEach(() => {
   resetMembersMock()
   resetCyclesMock()
   resetCardsMock()
+  resetBoardMock()
   // Sonner keeps its toast queue outside React, so dismiss it between tests.
   toast.dismiss()
   // The QueryClient is a singleton in the app; reset it between tests so one
