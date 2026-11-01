@@ -141,7 +141,8 @@ Audio/video transcription is delegated to a managed speech-to-text API. Running 
 
 - Before the retrospective is started, a member receives only their own cards.
 - The facilitator also cannot read other members' card content before reveal.
-- Project-page "submission status" exposes only counts / who submitted — never card content.
+- Project-page "submission status" exposes aggregate counts only, the same for every member including the facilitator; never who submitted, per-member counts, times, or card content; no card total before reveal. It comes from `get_cycle_status`, where "revealed" means `revealed_at is not null` (a cycle closed early from `collecting` is never revealed). The counts are not live: card writes broadcast nothing.
+- Residual risk, accepted for the MVP and tracked in #75: after reveal, a fully submitted team where one member has no attributed card shows that member wrote only anonymous cards, and watching the submitted count go up when someone says "done" shows that they submitted.
 
 **Hidden vote totals**
 
@@ -244,7 +245,7 @@ All RPCs validate the caller's membership and the current cycle stage.
 | RPC | Purpose |
 |---|---|
 | `get_cycle_board` | Visible cards, clusters, cluster assignments, my votes, `is_mine`, attributed author names after reveal |
-| `get_cycle_status` | Submission counts, stage, voting status — no card content |
+| `get_cycle_status` | One row: `cycle_id`, `status`, `is_revealed`, `member_count`, `submitted_member_count`, `my_card_count`, and `card_count` (null before reveal). Aggregate counts only — no ids, names, times, or card content. Voting status is left to #24 |
 | `create_card` | Own card during collecting; accepts `is_anonymous` per card |
 | `update_card` / `delete_card` | Own card, collecting stage only |
 | `create_cluster` / `rename_cluster` | During clustering |
