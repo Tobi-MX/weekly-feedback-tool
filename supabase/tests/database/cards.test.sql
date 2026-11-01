@@ -221,8 +221,8 @@ select is((select array_agg(p order by p) from unnest(array['SELECT', 'INSERT', 
 
 select is((select count(*)::int from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename in ('cards', 'card_authors')), 0, 'neither table is in the supabase_realtime publication');
 
--- Only the four RPCs read card_authors.
-select is((select array_agg(p.proname::text order by p.proname) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.prosrc ~ 'card_authors'), array['create_card', 'delete_card', 'get_my_cards', 'update_card'], 'only the four card RPCs in public mention card_authors');
+-- Only the four RPCs and #13's aggregate get_cycle_status read card_authors.
+select is((select array_agg(p.proname::text order by p.proname) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.prosrc ~ 'card_authors'), array['create_card', 'delete_card', 'get_cycle_status', 'get_my_cards', 'update_card'], 'only the four card RPCs and get_cycle_status in public mention card_authors');
 select is((select count(*)::int from pg_depend d join pg_rewrite r on r.oid = d.objid where d.classid = 'pg_rewrite'::regclass and d.refobjid = 'public.card_authors'::regclass), 0, 'no view reads card_authors');
 
 -- ---------------------------------------------------------------------------
