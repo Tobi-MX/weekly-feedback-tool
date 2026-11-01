@@ -265,7 +265,7 @@ All RPCs validate the caller's membership and the current cycle stage.
 |---|---|
 | `create_cycle` / `close_cycle` | Cycle lifecycle |
 | `start_retrospective` | collecting → reveal; sets `revealed_at`; facilitator only. Repeating it on a `reveal` cycle is a no-op; any other stage gets `cycle_not_collecting` |
-| `advance_stage` | Reveal → cluster → vote → discuss → closed |
+| `advance_stage` | Facilitator only; one step: reveal → cluster, cluster → vote. vote → discuss is `close_voting` (#24); discuss → closed is `publish_summary` (#34). Takes `(p_cycle_id, p_from_status)`: the caller names the stage it leaves, so a repeat is a no-op and nothing skips a stage. Errors: `not_project_member`, `not_project_facilitator`, `invalid_stage_transition`, `stage_out_of_date`. It inserts no event itself; #14's trigger records one `stage_changed` row |
 | `close_voting` | Ends voting and makes totals visible |
 | `set_discussion_status` | Mark cluster discussed / skipped / deferred |
 | `create_meeting_upload` | Register upload and issue a signed storage URL |
@@ -363,8 +363,10 @@ Rules:
 
 ### Board behavior
 
-- Stage comes from the cycle, not from local UI state.
-- Members see facilitator controls only if their role allows them.
+- Stage comes from the cycle, not from local UI state. The mode, stage indicator, and header badge all come from the latest `get_cycle_board` response (`status`, `is_revealed`); nothing is optimistic. Cards are shown only when `is_revealed` is true, in the response's order (never re-sorted).
+- Members see facilitator controls only if their role allows them: the caller's own `get_project_members` row must have `role = 'facilitator'`, never `owner_id`. Loading or failed members show no control.
+- Anonymous cards are always labeled "Anonymous" and carry no "you" marker, for their author too. Attributed cards show the author's name, with " (you)" on the caller's own.
+- One `cycle_events` channel per open board (#14's `useCycleEvents`). Every event and every `SUBSCRIBED` invalidates the board, cycle, and members queries. The page polls every 4 s only while Realtime is unavailable (`CHANNEL_ERROR`, `TIMED_OUT`, `CLOSED`), never while the tab is hidden, and shows a notice. A closed cycle and the not-found state hold no channel and never poll.
 - dnd-kit provides drag-and-drop with a keyboard-accessible "move to cluster" fallback.
 - Voting UI shows 3 remaining votes, allows stacking, and hides totals until close.
 - Discuss mode orders clusters by votes and lets the facilitator mark each topic.
