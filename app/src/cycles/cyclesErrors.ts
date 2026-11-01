@@ -1,7 +1,7 @@
 /**
  * Stable error codes raised by `create_cycle`, `close_cycle`,
- * `start_retrospective`, and `get_cycle_status` (which raises only
- * `not_project_member`). The database
+ * `start_retrospective`, `advance_stage`, and `get_cycle_status` (which
+ * raises only `not_project_member`). The database
  * raises them as the exception message; nothing else from a Postgres error is
  * ever kept, shown, or logged.
  */
@@ -12,6 +12,8 @@ export const CYCLES_ERROR_CODES = [
   'invalid_week_start',
   'cycle_already_open',
   'cycle_not_collecting',
+  'invalid_stage_transition',
+  'stage_out_of_date',
 ] as const
 
 export type CyclesErrorCode = (typeof CYCLES_ERROR_CODES)[number] | 'unknown'
@@ -69,5 +71,19 @@ export function startRetrospectiveErrorMessage(code: CyclesErrorCode): string {
       return 'Feedback collection has already ended for this cycle.'
     default:
       return 'Could not start the retrospective.'
+  }
+}
+
+/** The message shown when the board's stage control fails. */
+export function advanceStageErrorMessage(code: CyclesErrorCode): string {
+  switch (code) {
+    case 'not_project_facilitator':
+      return 'Only the facilitator can change the stage.'
+    case 'stage_out_of_date':
+      return 'The stage has already changed.'
+    case 'invalid_stage_transition':
+      return 'This stage cannot be changed from the board.'
+    default:
+      return 'Could not change the stage.'
   }
 }

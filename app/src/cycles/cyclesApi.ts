@@ -65,6 +65,15 @@ export interface StartedRetrospective {
   readonly revealedAt: string | null
 }
 
+/** The stage the board's facilitator control may leave. */
+export type AdvanceFromStatus = 'reveal' | 'cluster'
+
+/** The `advance_stage` result row. */
+export interface AdvancedStage {
+  readonly id: string
+  readonly status: CycleStatus
+}
+
 /**
  * A `get_cycle_status` row: aggregate submission counts for one cycle. It is
  * the same for every member, the facilitator included, apart from
@@ -128,6 +137,12 @@ const startedRowSchema = z.object({
   revealed_at: z.string().nullable(),
 })
 
+// Narrow: unknown keys are dropped.
+const advancedRowSchema = z.object({
+  id: z.string(),
+  status: statusSchema,
+})
+
 const countSchema = z.number().int().nonnegative()
 
 // Narrow: unknown keys (for example an author id) are dropped.
@@ -172,7 +187,11 @@ function toSummary(row: z.infer<typeof cycleRowSchema>): CycleSummary {
 /** Calls an RPC and keeps only the stable error code on failure. */
 async function callRpc(
   name:
-    'create_cycle' | 'close_cycle' | 'start_retrospective' | 'get_cycle_status',
+    | 'create_cycle'
+    | 'close_cycle'
+    | 'start_retrospective'
+    | 'advance_stage'
+    | 'get_cycle_status',
   args: Record<string, unknown>,
 ): Promise<unknown> {
   if (!supabase) {
@@ -314,6 +333,26 @@ export async function startRetrospective(
     throw new CyclesApiError('unknown')
   }
   return { id: row.id, status: row.status, revealedAt: row.revealed_at }
+}
+
+/**
+ * Facilitator only: moves the cycle one stage on from `fromStatus` (reveal to
+ * cluster, cluster to vote). The server picks the target from the stage being
+ * left, so a repeated call is a no-op that returns the current row.
+ */
+export async function advanceStage(
+  cycleId: string,
+  fromStatus: AdvanceFromStatus,
+): Promise<AdvancedStage> {
+  const data = await callRpc('advance_stage', {
+    p_cycle_id: cycleId,
+    p_from_status: fromStatus,
+  })
+  const [row] = parseRows(advancedRowSchema, data)
+  if (!row) {
+    throw new CyclesApiError('unknown')
+  }
+  return { id: row.id, status: row.status }
 }
 
 /**

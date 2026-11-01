@@ -438,12 +438,11 @@ describe('Starting the retrospective', () => {
     fireEvent.click(confirmButton(group))
 
     expect(await screen.findByText('Retrospective started.')).toBeVisible()
-    expect(
-      await screen.findByRole('heading', { name: 'Retrospective board' }),
-    ).toBeVisible()
-    expect(screen.getByTestId('location')).toHaveTextContent(
-      `/cycles/${openCycle.id}/board`,
-    )
+    await waitFor(() => {
+      expect(screen.getByTestId('location')).toHaveTextContent(
+        `/cycles/${openCycle.id}/board`,
+      )
+    })
     const keys = invalidate.mock.calls.map(([filters]) => filters?.queryKey)
     expect(keys).toContainEqual(['project-cycles', 'user-1', project.id])
     expect(keys).toContainEqual(['cycle-status', 'user-1', openCycle.id])
@@ -461,9 +460,11 @@ describe('Starting the retrospective', () => {
     fireEvent.click(confirmButton(group))
 
     expect(await screen.findByText('Retrospective started.')).toBeVisible()
-    expect(
-      await screen.findByRole('heading', { name: 'Retrospective board' }),
-    ).toBeVisible()
+    await waitFor(() => {
+      expect(screen.getByTestId('location')).toHaveTextContent(
+        `/cycles/${openCycle.id}/board`,
+      )
+    })
   })
 
   it('after the start the project page reads Revealed with the revealed status and View my feedback', async () => {

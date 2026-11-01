@@ -1,5 +1,7 @@
 import { vi } from 'vitest'
 import type {
+  AdvanceFromStatus,
+  AdvancedStage,
   ClosedCycle,
   CycleDetail,
   CycleEventsHandlers,
@@ -51,6 +53,10 @@ export const cyclesMock = {
     vi.fn<(cycleId: string) => Promise<CycleSubmissionStatus>>(),
   startRetrospective:
     vi.fn<(cycleId: string) => Promise<StartedRetrospective>>(),
+  advanceStage:
+    vi.fn<
+      (cycleId: string, fromStatus: AdvanceFromStatus) => Promise<AdvancedStage>
+    >(),
   subscribeToCycleEvents:
     vi.fn<(cycleId: string, handlers: CycleEventsHandlers) => () => void>(),
 
@@ -94,6 +100,9 @@ export const cyclesMock = {
       .mockReset()
       .mockRejectedValue(new CyclesApiError('unknown'))
     cyclesMock.startRetrospective
+      .mockReset()
+      .mockRejectedValue(new CyclesApiError('unknown'))
+    cyclesMock.advanceStage
       .mockReset()
       .mockRejectedValue(new CyclesApiError('unknown'))
     subscriptions.length = 0

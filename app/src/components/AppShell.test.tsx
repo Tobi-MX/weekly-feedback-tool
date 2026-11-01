@@ -1,6 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { mockRestoredSession } from '../test/authMock'
+import { boardMock } from '../test/boardMock'
 import { cyclesMock } from '../test/cyclesMock'
 import { profileMock } from '../test/profileMock'
 import { projectsMock } from '../test/projectsMock'
@@ -9,6 +10,8 @@ import { renderApp } from '../test/renderApp'
 // The feedback form is a real screen; its heading is the cycle's title.
 const FEEDBACK_CYCLE_ID = '30000000-0000-4000-8000-000000000001'
 const FEEDBACK_PATH = `/cycles/${FEEDBACK_CYCLE_ID}/feedback`
+// The board is a real screen too; its h1 is the cycle's title.
+const BOARD_PATH = `/cycles/${FEEDBACK_CYCLE_ID}/board`
 
 async function renderSignedIn(
   path: string,
@@ -23,13 +26,21 @@ async function renderSignedIn(
       created_at: '2026-10-30T12:00:00.000Z',
     })
   }
-  if (path === FEEDBACK_PATH) {
+  if (path === FEEDBACK_PATH || path === BOARD_PATH) {
     cyclesMock.fetchCycle.mockResolvedValue({
       id: FEEDBACK_CYCLE_ID,
       projectId: '10000000-0000-4000-8000-000000000001',
       title: 'Feedback cycle',
       weekStart: '2026-10-26',
       status: 'collecting',
+    })
+  }
+  if (path === BOARD_PATH) {
+    boardMock.fetchCycleBoard.mockResolvedValue({
+      cycleId: FEEDBACK_CYCLE_ID,
+      status: 'collecting',
+      isRevealed: false,
+      cards: [],
     })
   }
   renderApp({ initialEntries: [path] })
@@ -125,7 +136,7 @@ describe('AppShell', () => {
     ['/projects', 'Projects', 1],
     ['/projects/project-1', 'Project One', 1],
     [FEEDBACK_PATH, 'Feedback cycle', 0],
-    ['/cycles/abc/board', 'Retrospective board', 0],
+    [BOARD_PATH, 'Feedback cycle', 0],
     ['/cycles/abc/upload', 'Meeting upload', 0],
     ['/cycles/abc/summary', 'Retrospective summary', 0],
   ])(
