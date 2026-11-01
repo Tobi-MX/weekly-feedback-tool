@@ -3,8 +3,10 @@ import {
   useId,
   useRef,
   useState,
+  type DragEvent,
   type FormEvent,
   type KeyboardEvent,
+  type ReactNode,
 } from 'react'
 import { toast } from 'sonner'
 import { focusRing, wrapText } from '@/cards/CardForms'
@@ -14,8 +16,25 @@ import type { BoardCard, BoardCluster, CycleBoard } from './boardApi'
 import { ClusterCardItem } from './BoardCards'
 import { ungroupedCards } from './boardModel'
 import {
+  applyPendingMove,
+  CARD_DRAG_TYPE,
+  cardAnchor,
+  cardLocation,
+  cardMovedItself,
+  dropPosition,
+  isNoOpMove,
+  locationKey,
+  moveAnnouncement,
+  moveButtonLabel,
+  moveMenuItems,
+  type CardAnchor,
+  type CardMove,
+  type MoveMenuItem,
+} from './cardMove'
+import {
   clusterErrorCodeOf,
   clusterErrorMessage,
+  moveErrorMessage,
   NAME_REQUIRED_MESSAGE,
   NAME_TAKEN_MESSAGE,
   NAME_TOO_LONG_MESSAGE,
@@ -23,9 +42,11 @@ import {
   type ClusterErrorCode,
   type ClusterOperation,
 } from './clusterErrors'
+import { MoveMenu, useFinePointer } from './MoveMenu'
 import {
   useCreateCluster,
   useDeleteCluster,
+  useMoveCard,
   useRenameCluster,
 } from './useClusters'
 
@@ -114,6 +135,71 @@ function deleteQuestion(cluster: BoardCluster): string {
     : `${question} Its ${count} cards go back to Ungrouped.`
 }
 
+/** A card the board wants focused once it is shown at `at` (#18). */
+interface MoveFocus {
+  readonly cardId: string
+  readonly at: string
+}
+
+/** The open Move menu, and where its card was when it opened. */
+interface OpenMenu {
+  readonly cardId: string
+  readonly anchor: CardAnchor
+}
+
+/** An ongoing drag over the board. */
+interface DragState {
+  /** The dragged card when the drag started on this board. */
+  readonly cardId: string | null
+  /** The cluster id, or "ungrouped", under the pointer. */
+  readonly over: string | null
+  /** The insertion index inside the cluster's list, or null to append. */
+  readonly index: number | null
+}
+
+const UNGROUPED_TARGET = 'ungrouped'
+
+function sameAnchor(a: CardAnchor, b: CardAnchor): boolean {
+  return (
+    a.group === b.group &&
+    a.before.join() === b.before.join() &&
+    a.after.join() === b.after.join()
+  )
+}
+
+function carriesCard(event: DragEvent): boolean {
+  return Array.from(event.dataTransfer.types).includes(CARD_DRAG_TYPE)
+}
+
+/**
+ * The insertion index inside the cluster list under the pointer: the number
+ * of cards whose vertical midpoint is above it. Null outside the list
+ * (heading, empty area), which appends.
+ */
+function insertionIndex(event: DragEvent<HTMLElement>): number | null {
+  const target = event.target
+  if (!(target instanceof Element)) {
+    return null
+  }
+  const list = target.closest('ul[data-drop-list]')
+  if (list === null || !event.currentTarget.contains(list)) {
+    return null
+  }
+  const items = Array.from(list.querySelectorAll('li[data-card-id]'))
+  const index = items.findIndex((item) => {
+    const rect = item.getBoundingClientRect()
+    return event.clientY < rect.top + rect.height / 2
+  })
+  return index === -1 ? items.length : index
+}
+
+/** Drop-target props for a section; `target` is a cluster id or null. */
+interface DropTargetProps {
+  readonly onDragOver: (event: DragEvent<HTMLElement>) => void
+  readonly onDragLeave: (event: DragEvent<HTMLElement>) => void
+  readonly onDrop: (event: DragEvent<HTMLElement>) => void
+}
+
 function InlineError({ id, text }: { id: string; text: string }) {
   return (
     <p id={id} role="alert" className="text-sm text-destructive">
@@ -125,6 +211,9 @@ function InlineError({ id, text }: { id: string; text: string }) {
 interface ClusterSectionProps {
   readonly cluster: BoardCluster
   readonly cards: readonly BoardCard[]
+  readonly renderCard: (card: BoardCard, index: number) => ReactNode
+  readonly dropTarget: DropTargetProps
+  readonly dropActive: boolean
   readonly form: OpenForm | null
   readonly renamePending: boolean
   readonly deletePending: boolean
@@ -139,6 +228,9 @@ interface ClusterSectionProps {
 function ClusterSection({
   cluster,
   cards,
+  renderCard,
+  dropTarget,
+  dropActive,
   form,
   renamePending,
   deletePending,
@@ -277,7 +369,12 @@ function ClusterSection({
     <section
       aria-labelledby={form?.kind === 'rename' ? undefined : headingId}
       aria-label={form?.kind === 'rename' ? name : undefined}
-      className="min-w-0 space-y-3 rounded-lg border bg-card p-4 text-card-foreground"
+      data-drop-target={clusterId}
+      className={cn(
+        'min-w-0 space-y-3 rounded-lg border bg-card p-4 text-card-foreground',
+        dropActive && 'ring-2 ring-primary',
+      )}
+      {...dropTarget}
     >
       {header}
       {cards.length === 0 ? (
@@ -285,10 +382,12 @@ function ClusterSection({
           No cards in this cluster yet.
         </p>
       ) : (
-        <ul aria-label={`Cards in ${name}`} className="space-y-2">
-          {cards.map((card) => (
-            <ClusterCardItem key={card.cardId} card={card} />
-          ))}
+        <ul
+          aria-label={`Cards in ${name}`}
+          data-drop-list=""
+          className="space-y-2"
+        >
+          {cards.map((card, index) => renderCard(card, index))}
         </ul>
       )}
       {controls}
@@ -304,12 +403,31 @@ export interface ClusterModeProps {
 
 /**
  * The Cluster stage: the "New cluster" form, the ungrouped cards, and every
- * cluster with its Rename and Delete controls. Every member sees the same
- * controls. Nothing is optimistic: the lists change only when the board's
- * refetch returns, and a refetch never overwrites a draft being typed.
+ * cluster with its Rename and Delete controls, and every card with its Move
+ * menu and, on fine pointers, native drag (#18). Every member sees the same
+ * controls. Cluster writes are not optimistic: they show when the board's
+ * refetch returns, and a refetch never overwrites a draft being typed. A card
+ * move is the one optimistic write: the pending move is drawn over the server
+ * board until the refetch after it is in.
  */
 export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
-  const { cycleId, clusters } = board
+  const { cycleId } = board
+  const finePointer = useFinePointer()
+  const mover = useMoveCard(cycleId, (error) => {
+    const message = moveErrorMessage(clusterErrorCodeOf(error))
+    if (message === null) {
+      onLostAccess()
+    } else {
+      toast.error(message)
+    }
+  })
+  // The server board with the pending move (if any) applied on top. The
+  // cache is never edited; the overlay disappears with the mutation.
+  const displayed =
+    mover.pendingMove === null
+      ? board
+      : applyPendingMove(board, mover.pendingMove)
+  const { clusters } = displayed
   const createMutation = useCreateCluster(cycleId)
   const renameMutation = useRenameCluster(cycleId)
   const deleteMutation = useDeleteCluster(cycleId)
@@ -317,12 +435,22 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
   const [newDraft, setNewDraft] = useState('')
   const [newError, setNewError] = useState<string | null>(null)
   const [openForm, setOpenForm] = useState<OpenForm | null>(null)
-  const [announcement, setAnnouncement] = useState('')
+  // Each announcement gets a new id, which remounts the live region's text,
+  // so a repeated identical message (two moves to Ungrouped) is read again.
+  const [announcement, setAnnouncementState] = useState({ text: '', id: 0 })
+  const setAnnouncement = (text: string) => {
+    setAnnouncementState((current) => ({ text, id: current.id + 1 }))
+  }
   // A new object for every request, so the same target can be asked twice.
   const [focusTarget, setFocusTarget] = useState<FocusTarget | null>(null)
 
   // A synchronous second click or Enter must not send a second request.
   const createPendingRef = useRef(false)
+  const movePendingRef = useRef(false)
+  const [openMenu, setOpenMenu] = useState<OpenMenu | null>(null)
+  const [moveFocus, setMoveFocus] = useState<MoveFocus | null>(null)
+  const handledMoveFocusRef = useRef<MoveFocus | null>(null)
+  const [drag, setDrag] = useState<DragState | null>(null)
   const renamePendingRef = useRef(false)
   const deletePendingRef = useRef(false)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -340,6 +468,52 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
     setFocusTarget({ kind: 'new-input' })
   }
 
+  // Another member moved the card whose menu is open: close the menu, send
+  // nothing, and focus the card's Move button in its new place.
+  // Another card moving above or below it changes nothing.
+  if (openMenu !== null) {
+    const anchor = cardAnchor(displayed, openMenu.cardId)
+    if (cardMovedItself(openMenu.anchor, anchor)) {
+      setOpenMenu(null)
+      setMoveFocus({
+        cardId: openMenu.cardId,
+        at: locationKey(cardLocation(displayed, openMenu.cardId)),
+      })
+    } else if (
+      anchor !== openMenu.anchor &&
+      !sameAnchor(anchor, openMenu.anchor)
+    ) {
+      setOpenMenu({ ...openMenu, anchor })
+    }
+  }
+
+  // Focus a moved card's Move button once the card is shown where expected,
+  // and only if focus is still on that card (its button, its menu) or was
+  // lost to <body> because the control unmounted (#94's rule).
+  useEffect(() => {
+    if (moveFocus === null || handledMoveFocusRef.current === moveFocus) {
+      return
+    }
+    if (
+      locationKey(cardLocation(displayed, moveFocus.cardId)) !== moveFocus.at
+    ) {
+      return
+    }
+    handledMoveFocusRef.current = moveFocus
+    const active = document.activeElement
+    const onCard =
+      active === null ||
+      active === document.body ||
+      active.closest(`[data-card-id="${moveFocus.cardId}"]`) !== null ||
+      active.closest(`[data-move-menu="${moveFocus.cardId}"]`) !== null
+    if (!onCard) {
+      return
+    }
+    rootRef.current
+      ?.querySelector<HTMLElement>(`[data-move-card="${moveFocus.cardId}"]`)
+      ?.focus()
+  }, [moveFocus, displayed])
+
   useEffect(() => {
     if (focusTarget === null) {
       return
@@ -353,7 +527,160 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
   }, [focusTarget])
 
   const cardsById = new Map(board.cards.map((card) => [card.cardId, card]))
-  const ungrouped = ungroupedCards(board)
+  const ungrouped = ungroupedCards(displayed)
+
+  /** Focus the card's Move button where the given board shows it. */
+  const focusMovedCard = (cardId: string, shown: typeof board | null) => {
+    if (shown !== null) {
+      setMoveFocus({ cardId, at: locationKey(cardLocation(shown, cardId)) })
+    }
+  }
+
+  /** One move at a time, through move_card only; a no-op sends nothing. */
+  const startMove = (move: CardMove) => {
+    if (movePendingRef.current || isNoOpMove(displayed, move)) {
+      return
+    }
+    movePendingRef.current = true
+    setOpenMenu(null)
+    setDrag(null)
+    focusMovedCard(move.cardId, applyPendingMove(displayed, move))
+    mover
+      .mutateAsync(move)
+      .then(() => {
+        const server = mover.serverBoard()
+        if (server !== null) {
+          setAnnouncement(moveAnnouncement(server, move.cardId))
+        }
+        focusMovedCard(move.cardId, server)
+      })
+      .catch(() => {
+        // The toast was shown when the move failed; the card is back.
+        focusMovedCard(move.cardId, mover.serverBoard())
+      })
+      .finally(() => {
+        movePendingRef.current = false
+      })
+  }
+
+  /**
+   * One set of handlers for every drop target. Each section names itself in
+   * `data-drop-target`: a cluster id, or "ungrouped".
+   */
+  const targetOf = (event: DragEvent<HTMLElement>) => {
+    const over = event.currentTarget.dataset.dropTarget ?? UNGROUPED_TARGET
+    return { over, clusterId: over === UNGROUPED_TARGET ? null : over }
+  }
+
+  const dropHandlers: DropTargetProps = {
+    onDragOver: (event) => {
+      if (!carriesCard(event) || movePendingRef.current) {
+        return
+      }
+      const { over, clusterId } = targetOf(event)
+      event.preventDefault()
+      event.dataTransfer.dropEffect = 'move'
+      const index = clusterId === null ? null : insertionIndex(event)
+      setDrag((current) =>
+        current !== null && current.over === over && current.index === index
+          ? current
+          : { cardId: current?.cardId ?? null, over, index },
+      )
+    },
+    onDragLeave: (event) => {
+      const { over } = targetOf(event)
+      const next = event.relatedTarget
+      if (next instanceof Node && event.currentTarget.contains(next)) {
+        return
+      }
+      setDrag((current) =>
+        current?.over === over
+          ? { ...current, over: null, index: null }
+          : current,
+      )
+    },
+    onDrop: (event) => {
+      event.preventDefault()
+      const { clusterId } = targetOf(event)
+      const index = clusterId === null ? null : insertionIndex(event)
+      setDrag(null)
+      if (!carriesCard(event)) {
+        return
+      }
+      const cardId = event.dataTransfer.getData(CARD_DRAG_TYPE)
+      // A card of another tab, cycle, or board is not ours to move.
+      if (cardId === '' || cardLocation(displayed, cardId) === null) {
+        return
+      }
+      startMove({
+        cardId,
+        clusterId,
+        position:
+          clusterId === null
+            ? null
+            : dropPosition(displayed, cardId, clusterId, index),
+      })
+    },
+  }
+
+  const canDrag = finePointer && !mover.isPending
+
+  const renderCard = (
+    card: BoardCard,
+    dropLine: 'before' | 'after' | null = null,
+  ) => {
+    const items: readonly MoveMenuItem[] = moveMenuItems(displayed, card.cardId)
+    return (
+      <ClusterCardItem
+        key={card.cardId}
+        card={card}
+        draggable={canDrag}
+        dropLine={dropLine}
+        onDragStart={(event) => {
+          if (movePendingRef.current) {
+            event.preventDefault()
+            return
+          }
+          event.dataTransfer.setData(CARD_DRAG_TYPE, card.cardId)
+          event.dataTransfer.effectAllowed = 'move'
+          setOpenMenu(null)
+          setDrag({ cardId: card.cardId, over: null, index: null })
+        }}
+        onDragEnd={() => {
+          setDrag(null)
+        }}
+        moveControl={
+          items.length === 0 ? null : (
+            <MoveMenu
+              cardId={card.cardId}
+              label={moveButtonLabel(card)}
+              items={items}
+              open={openMenu?.cardId === card.cardId}
+              blocked={mover.isPending}
+              onOpenChange={(open) => {
+                if (open) {
+                  // A focus request left over from a move must not pull focus
+                  // out of the menu that is opening.
+                  handledMoveFocusRef.current = moveFocus
+                }
+                setOpenMenu(
+                  open
+                    ? {
+                        cardId: card.cardId,
+                        anchor: cardAnchor(displayed, card.cardId),
+                      }
+                    : null,
+                )
+              }}
+              onSelect={(item) => {
+                startMove(item.move)
+              }}
+            />
+          )
+        }
+      />
+    )
+  }
 
   /** Shows the toast (or the not-found state) and returns the code. */
   const reportError = (
@@ -530,13 +857,23 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
         {newError ? <InlineError id={newErrorId} text={newError} /> : null}
       </form>
 
-      <p role="status" className="sr-only">
-        {announcement}
+      <p
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+      >
+        <span key={announcement.id}>{announcement.text}</span>
       </p>
 
       <section
         aria-labelledby="cluster-ungrouped-heading"
-        className="min-w-0 space-y-3 rounded-lg border bg-card p-4 text-card-foreground"
+        data-drop-target={UNGROUPED_TARGET}
+        className={cn(
+          'min-w-0 space-y-3 rounded-lg border bg-card p-4 text-card-foreground',
+          drag?.over === UNGROUPED_TARGET && 'ring-2 ring-primary',
+        )}
+        {...dropHandlers}
       >
         <h3 id="cluster-ungrouped-heading" className="text-base font-semibold">
           Ungrouped ({ungrouped.length})
@@ -552,9 +889,7 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
             aria-label="Ungrouped cards"
             className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3"
           >
-            {ungrouped.map((card) => (
-              <ClusterCardItem key={card.cardId} card={card} />
-            ))}
+            {ungrouped.map((card) => renderCard(card))}
           </ul>
         )}
       </section>
@@ -577,6 +912,22 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
                 key={cluster.clusterId}
                 cluster={cluster}
                 cards={cards}
+                renderCard={(card, index) => {
+                  let line: 'before' | 'after' | null = null
+                  if (drag?.over === cluster.clusterId && drag.index !== null) {
+                    if (drag.index === index) {
+                      line = 'before'
+                    } else if (
+                      drag.index === cards.length &&
+                      index === cards.length - 1
+                    ) {
+                      line = 'after'
+                    }
+                  }
+                  return renderCard(card, line)
+                }}
+                dropTarget={dropHandlers}
+                dropActive={drag?.over === cluster.clusterId}
                 form={form}
                 renamePending={renameMutation.isPending}
                 deletePending={deleteMutation.isPending}

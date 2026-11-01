@@ -18,7 +18,7 @@ A **React single-page app** backed by **Supabase**, with **Postgres RPCs** as th
 | Routing | React Router |
 | Server state | TanStack Query |
 | UI | Tailwind CSS + shadcn/ui |
-| Drag & drop | dnd-kit |
+| Drag & drop | Native HTML5 drag on fine pointers plus a per-card "Move" menu (Radix dropdown); no library (#18) |
 | Forms & validation | React Hook Form + Zod |
 | Database | Supabase Postgres |
 | Auth | Supabase Auth (email magic link / Google) |
@@ -40,7 +40,7 @@ A **React single-page app** backed by **Supabase**, with **Postgres RPCs** as th
 ```
 ┌──────────────────────────────────────────────┐
 │ React SPA (static hosting)                   │
-│ React Router · TanStack Query · dnd-kit      │
+│ React Router · TanStack Query · native DnD   │
 └───────────────┬──────────────────────────────┘
                 │ Supabase JS client (anon key + JWT)
                 ▼
@@ -254,7 +254,7 @@ All RPCs validate the caller's membership and the current cycle stage.
 | `create_card` | Own card during collecting; accepts `is_anonymous` per card |
 | `update_card` / `delete_card` | Own card, collecting stage only |
 | `create_cluster` / `rename_cluster` / `delete_cluster` | Any member, `cluster` stage only; no role branch (the facilitator and the owner get nothing extra). Each locks the cycle row `FOR UPDATE`. Names are trimmed and must be 1–100 characters on one line and unique in the cycle ignoring case; at most 50 clusters. Renaming flips `source` to `manual`; renaming to the same name is a no-op. Deleting ungroups the cluster's cards. Errors: `not_project_member`, `cluster_not_found`, `cycle_not_clustering`, `invalid_cluster_name`, `cluster_name_taken`, `cluster_limit_reached`. They insert no event; #17's triggers record `clusters_changed` |
-| `move_card` | Move a card between clusters or to ungrouped |
+| `move_card` | Any member, `cluster` stage only; no role branch (the facilitator and the owner get nothing extra). Moves any card, attributed or anonymous, into a cluster at a zero-based position (null or too large appends; negative is refused), between clusters, up and down inside one, or to Ungrouped (null cluster, null position). Locks the cycle row `FOR UPDATE`, renumbers every cluster it touched to `sort_order` 0 … n-1 by (`sort_order`, `card_id`), and sets their `source` to `manual`; a move to the current place is a no-op that writes nothing. Ungrouped has no stored order. Errors: `not_project_member` (42501), `card_not_found`, `cluster_not_found`, `cycle_not_clustering`, `invalid_card_position`. It inserts no event and records no actor; #17's triggers record `clusters_changed` (#18) |
 | `merge_clusters` / `split_cluster` | During clustering |
 | `cast_vote` / `remove_vote` | Voting stage; enforce max 3 total, stackable |
 | `get_vote_totals` | Only after voting closes / everyone has voted |
@@ -342,7 +342,7 @@ Rules:
 ## 8. Realtime
 
 - **Enabled:** `cycle_events` only. Realtime applies its member-only select policy to each subscriber, and clients listen to `INSERT` only.
-- **Not enabled:** `feedback_cycles`, `cards`, `card_authors`, `clusters`, `cluster_cards`, `votes`, `transcripts`, `extracted_items` drafts. Cluster changes (#17–#21) reach open boards through `clusters_changed` rows on `cycle_events`, written by triggers on the cluster tables, so the board needs no new channel. Stage changes arrive through `cycle_events` (one `stage_changed` row per status change), not through Realtime on `feedback_cycles`. No client role can read `cards` directly, so card changes reach other sessions through `cycle_events` (#14, #16) rather than through Realtime on `cards`.
+- **Not enabled:** `feedback_cycles`, `cards`, `card_authors`, `clusters`, `cluster_cards`, `votes`, `transcripts`, `extracted_items` drafts. Cluster changes (#17–#21), card moves (#18) included, reach open boards through `clusters_changed` rows on `cycle_events`, written by triggers on the cluster tables, so the board needs no new channel. Stage changes arrive through `cycle_events` (one `stage_changed` row per status change), not through Realtime on `feedback_cycles`. No client role can read `cards` directly, so card changes reach other sessions through `cycle_events` (#14, #16) rather than through Realtime on `cards`.
 - A client that receives an event reads nothing from it and re-reads through the RPCs. It also re-reads every time its channel reports `SUBSCRIBED`, so an event missed while disconnected is caught up.
 - Clients use TanStack Query with optimistic updates; Realtime events invalidate the relevant queries.
 - A polling fallback (3–5 seconds) is acceptable if Realtime proves unreliable. Realtime is not a hard MVP dependency.
@@ -370,7 +370,8 @@ Rules:
 - Anonymous cards are always labeled "Anonymous" and carry no "you" marker, for their author too. Attributed cards show the author's name, with " (you)" on the caller's own.
 - One `cycle_events` channel per open board (#14's `useCycleEvents`). Every event and every `SUBSCRIBED` invalidates the board, cycle, and members queries. The page polls every 4 s only while Realtime is unavailable (`CHANNEL_ERROR`, `TIMED_OUT`, `CLOSED`), never while the tab is hidden, and shows a notice. A closed cycle and the not-found state hold no channel and never poll.
 - Cluster mode (#17) shows a "New cluster" form, an "Ungrouped (N)" section, and each cluster with Rename and Delete, the same for every member. Client validation mirrors the server's name rules and also refuses "Ungrouped". A refetch never overwrites a draft; a form whose cluster disappears closes and focus moves to the new-cluster input. "Start voting" shows the cluster and ungrouped-card counts first.
-- dnd-kit provides drag-and-drop with a keyboard-accessible "move to cluster" fallback.
+- Card movement (#18) has no library. Every card in cluster mode has a "Move" button and Radix menu (Move up, Move down, Move to Ungrouped, Move to <cluster>), the keyboard, screen-reader, and touch path. On fine pointers (`(pointer: fine)`) cards are also natively draggable; a drag carries only the card id under `application/x-weekly-feedback-card`, and each cluster and Ungrouped is a drop target with a ring and a 2 px insertion line. Touch dragging is #91. One move runs at a time.
+- Card moves are the one optimistic board write: the cluster view draws the pending `move_card` variables over the server board (never a cache edit) until the refetch after it is in, and drops the overlay at once on failure. The stage and every other board write stay non-optimistic. After a move, focus goes to the card's Move button only if focus is still on that card or was lost to `<body>`.
 - Voting UI shows 3 remaining votes, allows stacking, and hides totals until close.
 - Discuss mode orders clusters by votes and lets the facilitator mark each topic.
 
@@ -508,7 +509,7 @@ At MVP scale, the dominant costs are engineering time, not infrastructure:
 2. **Attendance.** Is attendance entered manually by the facilitator, or derived from submissions/votes?
 3. **Invitations.** Slack/email integrations are out of scope. Is an invite link/code sufficient, or should Supabase Auth send email invites?
 4. **Multiple facilitators.** One facilitator per project, or can several members hold the role?
-5. **Cluster editing rights.** The plan says "the team" can move/merge/split. Answered for `create_cluster`, `rename_cluster`, and `delete_cluster` (#17): every current member, with no extra right or restriction for the facilitator or the owner. Still open for move, merge, and split (#18, #19).
+5. **Cluster editing rights.** The plan says "the team" can move/merge/split. Answered for `create_cluster`, `rename_cluster`, and `delete_cluster` (#17): every current member, with no extra right or restriction for the facilitator or the owner. Answered for `move_card` (#18) the same way: any member may move any card, with nothing extra for the facilitator or the owner. Still open for merge and split (#19).
 6. **Post-reveal card editing.** Cards are editable before the retrospective. Should they become read-only after reveal? (Recommended: yes.)
 7. **Notes visibility.** Are discussion notes visible to the whole team, or only the facilitator?
 8. **Media retention.** Delete uploaded audio/video after transcription, or retain for re-processing? For how long?
