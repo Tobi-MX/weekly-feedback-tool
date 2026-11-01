@@ -1,12 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '@/auth/AuthProvider'
+import { cycleBoardQueryKey } from '@/board/boardKeys'
 import {
+  advanceStage,
   closeCycle,
   createCycle,
   fetchCycle,
   fetchCycleStatus,
   fetchProjectCycles,
   startRetrospective,
+  type AdvanceFromStatus,
   type CreateCycleInput,
 } from './cyclesApi'
 import { cyclesErrorCodeOf } from './cyclesErrors'
@@ -49,12 +52,25 @@ export function useProjectCyclesQuery(projectId: string | undefined) {
   })
 }
 
+export interface CycleQueryOptions {
+  /**
+   * A polling interval in milliseconds, or `false` (the default) for none.
+   * The board polls only while Realtime is unavailable. Polling stops while
+   * the tab is hidden (TanStack's default `refetchIntervalInBackground`).
+   */
+  readonly refetchInterval?: number | false
+}
+
 /**
  * One cycle by id, scoped by user and cycle id. It is re-read when the window
  * regains focus and when the browser reconnects, so a page that depends on the
  * stage sees a change without a reload (the app default turns focus off).
  */
-export function useCycleQuery(cycleId: string, enabled: boolean) {
+export function useCycleQuery(
+  cycleId: string,
+  enabled: boolean,
+  options: CycleQueryOptions = {},
+) {
   const { userId, ready } = useUserId()
 
   return useQuery({
@@ -63,6 +79,7 @@ export function useCycleQuery(cycleId: string, enabled: boolean) {
     enabled: ready && enabled,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
+    refetchInterval: options.refetchInterval ?? false,
   })
 }
 
@@ -144,5 +161,38 @@ export function useStartRetrospective(projectId: string) {
   return useMutation({
     mutationFn: (cycleId: string) => startRetrospective(cycleId),
     onSuccess: (_row, cycleId) => invalidate(cycleId),
+  })
+}
+
+/**
+ * Invalidates the two queries the board's stage depends on: the board itself
+ * and the cycle (title, week, project).
+ */
+export function useInvalidateBoardStage(cycleId: string) {
+  const { userId } = useUserId()
+  const queryClient = useQueryClient()
+  return () =>
+    Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: cycleBoardQueryKey(userId, cycleId),
+      }),
+      queryClient.invalidateQueries({
+        queryKey: cycleQueryKey(userId, cycleId),
+      }),
+    ])
+}
+
+/**
+ * The board's stage control. Success or failure, the board and the cycle are
+ * re-read when it settles; nothing is optimistic, so the mode changes only
+ * when the server's answer arrives.
+ */
+export function useAdvanceStage(cycleId: string) {
+  const invalidate = useInvalidateBoardStage(cycleId)
+
+  return useMutation({
+    mutationFn: (fromStatus: AdvanceFromStatus) =>
+      advanceStage(cycleId, fromStatus),
+    onSettled: () => invalidate(),
   })
 }
