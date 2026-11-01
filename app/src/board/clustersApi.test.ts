@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   clusterErrorCodeOf,
   clusterErrorMessage,
+  moveErrorMessage,
   ClustersApiError,
   type ClusterErrorCode,
 } from './clusterErrors'
@@ -14,7 +15,7 @@ vi.mock('../auth/supabaseClient', () => ({
   },
 }))
 
-const { createCluster, renameCluster, deleteCluster } =
+const { createCluster, renameCluster, deleteCluster, moveCard } =
   await vi.importActual<typeof import('./clustersApi')>('./clustersApi')
 
 interface DbResult {
@@ -45,11 +46,14 @@ async function captureError(promise: Promise<unknown>): Promise<unknown> {
   )
 }
 
-/** The three calls, each with the arguments the tests use. */
+const CARD_ID = 'a0000000-0000-4000-8000-000000000001'
+
+/** The four calls, each with the arguments the tests use. */
 const CALLS = [
   ['createCluster', () => createCluster(CYCLE_ID, 'Process')],
   ['renameCluster', () => renameCluster(CLUSTER_ID, 'Process')],
   ['deleteCluster', () => deleteCluster(CLUSTER_ID)],
+  ['moveCard', () => moveCard(CARD_ID, CLUSTER_ID, 2)],
 ] as const
 
 beforeEach(() => {
@@ -105,6 +109,24 @@ describe('clustersApi', () => {
     ])
   })
 
+  it('moveCard calls move_card once with { p_card_id, p_cluster_id, p_position }', async () => {
+    const fake = createClientMock({ data: null, error: null })
+
+    await expect(moveCard(CARD_ID, CLUSTER_ID, 0)).resolves.toBeUndefined()
+    await expect(moveCard(CARD_ID, null, null)).resolves.toBeUndefined()
+    expect(fake.rpc.mock.calls).toStrictEqual([
+      [
+        'move_card',
+        { p_card_id: CARD_ID, p_cluster_id: CLUSTER_ID, p_position: 0 },
+      ],
+      [
+        'move_card',
+        { p_card_id: CARD_ID, p_cluster_id: null, p_position: null },
+      ],
+    ])
+    expect(fake.from).not.toHaveBeenCalled()
+  })
+
   it.each<[string, unknown]>([
     ['no row', []],
     ['two rows', [row, row]],
@@ -134,6 +156,8 @@ describe('clustersApi', () => {
     ['P0001', 'invalid_cluster_name', 'invalid_cluster_name'],
     ['P0001', 'cluster_name_taken', 'cluster_name_taken'],
     ['P0001', 'cluster_limit_reached', 'cluster_limit_reached'],
+    ['P0001', 'card_not_found', 'card_not_found'],
+    ['P0001', 'invalid_card_position', 'invalid_card_position'],
     ['42501', 'permission denied for function create_cluster', 'unknown'],
     [
       '23505',
@@ -142,7 +166,7 @@ describe('clustersApi', () => {
     ],
     ['PGRST202', 'Could not find the function', 'unknown'],
   ])(
-    'maps %s %s to %s for all three calls without keeping or logging the raw text',
+    'maps %s %s to %s for all four calls without keeping or logging the raw text',
     async (code, message, expected) => {
       createClientMock({ data: null, error: { code, message } })
 
@@ -192,5 +216,22 @@ describe('clustersApi', () => {
     expect(clusterErrorMessage('unknown', 'delete')).toBe(
       'Could not delete the cluster.',
     )
+  })
+
+  it('holds the move copy next to the cluster copy', () => {
+    expect(moveErrorMessage('not_project_member')).toBeNull()
+    expect(moveErrorMessage('card_not_found')).toBe(
+      'This card no longer exists.',
+    )
+    expect(moveErrorMessage('cluster_not_found')).toBe(
+      'This cluster no longer exists.',
+    )
+    expect(moveErrorMessage('cycle_not_clustering')).toBe(
+      'Cards can only be moved during the Cluster stage.',
+    )
+    expect(moveErrorMessage('invalid_card_position')).toBe(
+      'Could not move the card.',
+    )
+    expect(moveErrorMessage('unknown')).toBe('Could not move the card.')
   })
 })

@@ -10,6 +10,9 @@ export const CLUSTER_ERROR_CODES = [
   'invalid_cluster_name',
   'cluster_name_taken',
   'cluster_limit_reached',
+  // #18: move_card.
+  'card_not_found',
+  'invalid_card_position',
 ] as const
 
 export type ClusterErrorCode = (typeof CLUSTER_ERROR_CODES)[number] | 'unknown'
@@ -27,6 +30,12 @@ export const NAME_TAKEN_MESSAGE = 'A cluster with this name already exists.'
 export const LIMIT_REACHED_MESSAGE = 'This cycle already has 50 clusters.'
 export const SAVE_FAILED_MESSAGE = 'Could not save the cluster.'
 export const DELETE_FAILED_MESSAGE = 'Could not delete the cluster.'
+
+/** The toast copy for a failed card move (#18). */
+export const CARD_GONE_MESSAGE = 'This card no longer exists.'
+export const MOVE_NOT_CLUSTERING_MESSAGE =
+  'Cards can only be moved during the Cluster stage.'
+export const MOVE_FAILED_MESSAGE = 'Could not move the card.'
 
 /** The client's own validation copy, shown inline without a request. */
 export const NAME_REQUIRED_MESSAGE = 'Enter a cluster name.'
@@ -54,10 +63,36 @@ export function clusterErrorMessage(
       return NAME_TAKEN_MESSAGE
     case 'cluster_limit_reached':
       return LIMIT_REACHED_MESSAGE
+    // move_card's codes; a cluster write never raises them.
+    case 'card_not_found':
+    case 'invalid_card_position':
     case 'unknown':
       return operation === 'delete'
         ? DELETE_FAILED_MESSAGE
         : SAVE_FAILED_MESSAGE
+  }
+}
+
+/**
+ * The toast for a failed card move, or null for `not_project_member`, which
+ * switches the board to its not-found state instead.
+ */
+export function moveErrorMessage(code: ClusterErrorCode): string | null {
+  switch (code) {
+    case 'not_project_member':
+      return null
+    case 'card_not_found':
+      return CARD_GONE_MESSAGE
+    case 'cluster_not_found':
+      return CLUSTER_GONE_MESSAGE
+    case 'cycle_not_clustering':
+      return MOVE_NOT_CLUSTERING_MESSAGE
+    case 'invalid_card_position':
+    case 'invalid_cluster_name':
+    case 'cluster_name_taken':
+    case 'cluster_limit_reached':
+    case 'unknown':
+      return MOVE_FAILED_MESSAGE
   }
 }
 

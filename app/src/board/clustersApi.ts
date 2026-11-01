@@ -26,7 +26,7 @@ interface DbResult {
 
 /** Calls an RPC once and keeps only the stable error code on failure. */
 async function callRpc(
-  name: 'create_cluster' | 'rename_cluster' | 'delete_cluster',
+  name: 'create_cluster' | 'rename_cluster' | 'delete_cluster' | 'move_card',
   args: Record<string, unknown>,
 ): Promise<unknown> {
   if (!supabase) {
@@ -80,4 +80,22 @@ export async function renameCluster(
 /** Deletes a cluster; its cards become ungrouped. */
 export async function deleteCluster(clusterId: string): Promise<void> {
   await callRpc('delete_cluster', { p_cluster_id: clusterId })
+}
+
+/**
+ * Moves a card (#18). A null cluster is Ungrouped, and then the position must
+ * be null. The position is the card's zero-based index in the target after
+ * the move, counted among the target's other cards; null means the end, and
+ * the server clamps a larger value to the end.
+ */
+export async function moveCard(
+  cardId: string,
+  clusterId: string | null,
+  position: number | null,
+): Promise<void> {
+  await callRpc('move_card', {
+    p_card_id: cardId,
+    p_cluster_id: clusterId,
+    p_position: position,
+  })
 }
