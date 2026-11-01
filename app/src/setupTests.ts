@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { afterEach, beforeEach, vi } from 'vitest'
 import { queryClient } from './lib/queryClient'
 import { resetAuthMock } from './test/authMock'
+import { resetCardsMock } from './test/cardsMock'
 import { resetCyclesMock } from './test/cyclesMock'
 import { resetMembersMock } from './test/membersMock'
 import { resetProfileMock } from './test/profileMock'
@@ -41,6 +42,13 @@ vi.mock('./projects/membersApi', async () => {
 // never reach the network.
 vi.mock('./cycles/cyclesApi', async () => {
   const { cyclesMock: mock } = await import('./test/cyclesMock')
+  return mock
+})
+
+// The four card RPCs use the same pattern, so feedback form tests never reach
+// the network.
+vi.mock('./cards/cardsApi', async () => {
+  const { cardsMock: mock } = await import('./test/cardsMock')
   return mock
 })
 
@@ -82,6 +90,7 @@ beforeEach(() => {
   resetProjectsMock()
   resetMembersMock()
   resetCyclesMock()
+  resetCardsMock()
   // Sonner keeps its toast queue outside React, so dismiss it between tests.
   toast.dismiss()
   // The QueryClient is a singleton in the app; reset it between tests so one
