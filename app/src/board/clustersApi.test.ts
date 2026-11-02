@@ -228,6 +228,7 @@ describe('clustersApi', () => {
     ['P0001', 'invalid_card_selection', 'invalid_card_selection'],
     ['P0001', 'card_not_in_cluster', 'card_not_in_cluster'],
     ['P0001', 'split_takes_all_cards', 'split_takes_all_cards'],
+    ['42501', 'not_project_facilitator', 'not_project_facilitator'],
     ['P0001', 'cluster_not_found: d1000000', 'unknown'],
     ['42501', 'permission denied for function create_cluster', 'unknown'],
     [
@@ -317,6 +318,18 @@ describe('clustersApi', () => {
     )
     expect(clusterErrorMessage('unknown', 'save')).toBe(
       'Could not save the cluster.',
+    )
+  })
+
+  it('maps not_project_facilitator to one toast for every write, moves included (#19b)', () => {
+    const operations = ['save', 'delete', 'merge', 'split'] as const
+    for (const operation of operations) {
+      expect(clusterErrorMessage('not_project_facilitator', operation)).toBe(
+        'Only the facilitator can change clusters.',
+      )
+    }
+    expect(moveErrorMessage('not_project_facilitator')).toBe(
+      'Only the facilitator can change clusters.',
     )
   })
 

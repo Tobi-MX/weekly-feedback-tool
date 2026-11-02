@@ -153,14 +153,29 @@ function setup(options: SetupOptions = {}) {
   boardMock.fetchCycleBoard.mockResolvedValue(
     options.board ?? boardOf('cluster'),
   )
-  membersMock.fetchProjectMembers.mockResolvedValue(
-    options.members ?? [memberRow({})],
-  )
+  const members = options.members ?? [memberRow({ role: 'facilitator' })]
+  editableSetup = isFacilitatorOf(members)
+  membersMock.fetchProjectMembers.mockResolvedValue(members)
   return renderApp({ initialEntries: [PATH] })
 }
 
+/** Whether the last setup's caller is the facilitator (#19b). */
+let editableSetup = true
+
+function isFacilitatorOf(members: readonly ProjectMember[]): boolean {
+  return members.some((member) => member.isMe && member.role === 'facilitator')
+}
+
+/**
+ * The cluster board, once the members query has given the facilitator the
+ * controls (#19b: the board shows read-only until then).
+ */
 async function clusterBoard(): Promise<HTMLElement> {
-  return screen.findByTestId('cluster-board')
+  const board = await screen.findByTestId('cluster-board')
+  if (editableSetup) {
+    await screen.findByRole('form', { name: 'New cluster' })
+  }
+  return board
 }
 
 function moveButton(card: BoardCard): HTMLElement {
@@ -846,32 +861,89 @@ describe('live changes around a move', () => {
 })
 
 describe('anonymity of the Move control', () => {
-  it('an anonymous card renders identical DOM for two members and its author; every role sees the same controls', async () => {
-    const html: string[] = []
-    const views: [string, ProjectMember[]][] = [
-      ['user-1', [memberRow({ role: 'facilitator', isOwner: true })]],
-      ['user-2', [memberRow({ userId: 'user-2', isOwner: true })]],
-      ['user-3', [memberRow({ userId: 'user-3' })]],
-    ]
-    for (const [userId, members] of views) {
+  it('an anonymous card renders identical DOM for its author and others within each role; only the facilitator gets controls (#19b)', async () => {
+    const run = async (userId: string, members: ProjectMember[]) => {
       const view = setup({ userId, members })
       await clusterBoard()
       await waitFor(() => {
         expect(membersMock.fetchProjectMembers).toHaveBeenCalled()
       })
-      html.push(
-        cardItem(P2).outerHTML.replace(/_r_[0-9a-z]+_/g, 'ID') +
-          screen
-            .getByTestId('cluster-board')
-            .outerHTML.replace(/_r_[0-9a-z]+_/g, 'ID'),
-      )
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      })
+      const item = cardItem(P2)
+      const content = within(item).getByText(P2.text).parentElement
+      const result = {
+        item: item.outerHTML.replace(/_r_[0-9a-z]+_/g, 'ID'),
+        content: (content?.outerHTML ?? '').replace(/_r_[0-9a-z]+_/g, 'ID'),
+        board: screen
+          .getByTestId('cluster-board')
+          .outerHTML.replace(/_r_[0-9a-z]+_/g, 'ID'),
+      }
       view.unmount()
       queryClient.clear()
       membersMock.fetchProjectMembers.mockClear()
+      return result
     }
-    expect(html[1]).toBe(html[0])
-    expect(html[2]).toBe(html[0])
-    expect(html[0]).not.toMatch(/moved by|being moved/i)
+    const facilitator = await run('user-1', [
+      memberRow({ role: 'facilitator', isOwner: true }),
+    ])
+    // The same anonymous card seen by a facilitator who wrote it: the server
+    // sends the same card, so nothing can differ.
+    const facilitatorAuthor = await run('user-4', [
+      memberRow({ userId: 'user-4', role: 'facilitator' }),
+    ])
+    const owner = await run('user-2', [
+      memberRow({ userId: 'user-2', isOwner: true }),
+    ])
+    const member = await run('user-3', [memberRow({ userId: 'user-3' })])
+    const author = await run('user-5', [memberRow({ userId: 'user-5' })])
+
+    expect(facilitatorAuthor.item).toBe(facilitator.item)
+    expect(owner.item).toBe(member.item)
+    expect(author.item).toBe(member.item)
+    expect(owner.board).toBe(member.board)
+    expect(author.board).toBe(member.board)
+    for (const view of [facilitatorAuthor, owner, member, author]) {
+      expect(view.content).toBe(facilitator.content)
+    }
+    expect(facilitator.item).toMatch(/data-move-card=/)
+    expect(member.item).not.toMatch(/<button|draggable|data-move-card/)
+    for (const view of [facilitator, member]) {
+      expect(view.board).not.toMatch(
+        /moved by|being moved|facilitator|edited by|read-only|readonly/i,
+      )
+    }
+  })
+})
+
+describe('controls depend on the place, never on authorship (#19b)', () => {
+  it('an anonymous and an attributed card in the same place get the same controls', async () => {
+    const middleControls = async (order: readonly BoardCard[]) => {
+      const view = setup({
+        pointer: 'fine',
+        board: boardOf('cluster', [
+          { ...PROCESS, cardIds: order.map((card) => card.cardId) },
+          TOOLS,
+        ]),
+      })
+      await clusterBoard()
+      const middle = order[1]
+      const element = cardItem(middle)
+      const draggable = element.getAttribute('draggable')
+      const buttons = within(element)
+        .getAllByRole('button')
+        .map((button) => button.textContent)
+      const menu = await openMenu(moveButton(middle))
+      const items = menuLabels(menu)
+      view.unmount()
+      queryClient.clear()
+      return { draggable, buttons, items }
+    }
+    const anonymous = await middleControls([P1, P2, P3])
+    const attributed = await middleControls([P2, P1, P3])
+    expect(anonymous).toEqual(attributed)
+    expect(anonymous.draggable).toBe('true')
   })
 })
 

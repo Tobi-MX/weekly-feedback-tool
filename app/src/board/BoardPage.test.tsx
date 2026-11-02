@@ -227,7 +227,7 @@ describe('board modes', () => {
       'cluster',
       true,
       'Cluster',
-      'Group related cards into clusters. Everyone in the project can add, rename and delete clusters until voting starts.',
+      'Group related cards into clusters. Only you, as the facilitator, can change clusters until voting starts.',
       'Start voting',
     ],
     ['vote', true, 'Vote', 'Voting is not available yet.', null],
@@ -264,7 +264,8 @@ describe('board modes', () => {
 
       expect(await modeHeading(heading)).toBeInTheDocument()
       expect(screen.getAllByRole('heading', { level: 2 })).toHaveLength(1)
-      expect(screen.getByText(copy)).toBeInTheDocument()
+      // The cluster intro follows the members query (#19b).
+      expect(await screen.findByText(copy)).toBeInTheDocument()
       expect(
         screen.getByRole('heading', { level: 1, name: 'Sprint twelve retro' }),
       ).toBeInTheDocument()
@@ -317,12 +318,12 @@ describe('board modes', () => {
       await waitFor(() => {
         expect(membersMock.fetchProjectMembers).toHaveBeenCalled()
       })
-      // Cluster mode (#17) shows the same "Add cluster" button to everyone.
+      // Cluster mode is read-only for everyone but the facilitator (#19b).
       expect(
         within(screen.getByRole('main'))
           .queryAllByRole('button')
           .map((button) => button.textContent),
-      ).toEqual(status === 'cluster' ? ['Add cluster'] : [])
+      ).toEqual([])
       expect(
         screen.queryByText('Start the retrospective from the project page.'),
       ).not.toBeInTheDocument()

@@ -156,14 +156,29 @@ function setup(options: SetupOptions = {}) {
   boardMock.fetchCycleBoard.mockResolvedValue(
     options.board ?? boardOf('cluster'),
   )
-  membersMock.fetchProjectMembers.mockResolvedValue(
-    options.members ?? [memberRow({})],
-  )
+  const members = options.members ?? [memberRow({ role: 'facilitator' })]
+  editableSetup = isFacilitatorOf(members)
+  membersMock.fetchProjectMembers.mockResolvedValue(members)
   return renderApp({ initialEntries: [PATH] })
 }
 
+/** Whether the last setup's caller is the facilitator (#19b). */
+let editableSetup = true
+
+function isFacilitatorOf(members: readonly ProjectMember[]): boolean {
+  return members.some((member) => member.isMe && member.role === 'facilitator')
+}
+
+/**
+ * The cluster board, once the members query has given the facilitator the
+ * controls (#19b: the board shows read-only until then).
+ */
 async function clusterBoard(): Promise<HTMLElement> {
-  return screen.findByTestId('cluster-board')
+  const board = await screen.findByTestId('cluster-board')
+  if (editableSetup) {
+    await screen.findByRole('form', { name: 'New cluster' })
+  }
+  return board
 }
 
 function section(name: RegExp): HTMLElement {
@@ -813,23 +828,18 @@ describe('the Split control', () => {
     expect(boardMock.splitCluster).not.toHaveBeenCalled()
   })
 
-  it('an anonymous card renders identical checkbox DOM for two members and its author; every role sees the same controls', async () => {
-    const html: string[] = []
-    const views: [string, ProjectMember[]][] = [
+  it('an anonymous card renders identical checkbox DOM for facilitators who did and did not write it; non-facilitators get no Merge, Split, or checkbox (#19b)', async () => {
+    const facilitatorHtml: string[] = []
+    for (const [userId, members] of [
       ['user-1', [memberRow({ role: 'facilitator', isOwner: true })]],
-      ['user-2', [memberRow({ userId: 'user-2', isOwner: true })]],
-      ['user-3', [memberRow({ userId: 'user-3' })]],
-    ]
-    for (const [userId, members] of views) {
-      const view = setup({ userId, members })
+      ['user-4', [memberRow({ userId: 'user-4', role: 'facilitator' })]],
+    ] as const) {
+      const view = setup({ userId, members: [...members] })
       await clusterBoard()
-      await waitFor(() => {
-        expect(membersMock.fetchProjectMembers).toHaveBeenCalled()
-      })
       const controls = section(/^Process/).outerHTML
       await openSplit('Process')
       const item = checkbox(P2).closest('li')
-      html.push(
+      facilitatorHtml.push(
         (controls + (item?.outerHTML ?? '')).replace(/_r_[0-9a-z]+_/g, 'ID'),
       )
       expect(checkbox(P2).getAttribute('aria-label')).toBe(
@@ -839,12 +849,37 @@ describe('the Split control', () => {
       queryClient.clear()
       membersMock.fetchProjectMembers.mockClear()
     }
-    expect(html[1]).toBe(html[0])
-    expect(html[2]).toBe(html[0])
-    expect(html[0]).not.toMatch(/split by|merged by|being merged/i)
-    expect(html[0]).not.toMatch(
+    expect(facilitatorHtml[1]).toBe(facilitatorHtml[0])
+    expect(facilitatorHtml[0]).not.toMatch(/split by|merged by|being merged/i)
+    expect(facilitatorHtml[0]).not.toMatch(
       /aria-label="Select card: [^"]*(Ada|you|Anonymous)/,
     )
+
+    const readOnlyHtml: string[] = []
+    for (const [userId, members] of [
+      ['user-2', [memberRow({ userId: 'user-2', isOwner: true })]],
+      ['user-3', [memberRow({ userId: 'user-3' })]],
+    ] as const) {
+      const view = setup({ userId, members: [...members] })
+      await clusterBoard()
+      await waitFor(() => {
+        expect(membersMock.fetchProjectMembers).toHaveBeenCalled()
+      })
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      })
+      expect(
+        screen.queryByRole('button', { name: /^(Merge|Split) cluster / }),
+      ).toBeNull()
+      expect(screen.queryByRole('checkbox')).toBeNull()
+      readOnlyHtml.push(
+        section(/^Process/).outerHTML.replace(/_r_[0-9a-z]+_/g, 'ID'),
+      )
+      view.unmount()
+      queryClient.clear()
+      membersMock.fetchProjectMembers.mockClear()
+    }
+    expect(readOnlyHtml[1]).toBe(readOnlyHtml[0])
   })
 })
 
