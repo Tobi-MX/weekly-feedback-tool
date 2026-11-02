@@ -146,6 +146,104 @@ still succeeds and prints `Finished supabase db reset`.
 `supabase/.branches/`; both are gitignored. The only committed Supabase files
 are `supabase/config.toml` and `supabase/.gitignore`.
 
+## Edge Functions
+
+The `cluster-feedback` Edge Function (#20) lives in
+`supabase/functions/cluster-feedback/`, with shared helpers in
+`supabase/functions/_shared/`. Its dependencies are pinned in
+`supabase/functions/cluster-feedback/deno.json`.
+
+### Deno CLI
+
+The Deno tests, `deno check`, and `deno lint` need the Deno CLI, verified
+with **2.9.7** (the version CI uses). Install it for your user, without sudo:
+
+```bash
+curl -fsSL https://deno.land/install.sh | sh -s -- -y --no-modify-path v2.9.7
+```
+
+It installs to `~/.deno/bin/deno`; add that directory to your `PATH` or call
+it by its full path. `supabase functions serve` does not need it: the local
+Edge runtime brings its own Deno.
+
+### Environment file
+
+The function reads two secrets. Copy the committed example, which holds
+placeholders only, to the gitignored `supabase/functions/.env`:
+
+```bash
+cp supabase/functions/.env.example supabase/functions/.env
+```
+
+| Variable            | Meaning                                                                                  |
+| ------------------- | ---------------------------------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY` | Your Anthropic API key. Empty means every call returns `ai_not_configured`.               |
+| `ALLOWED_ORIGIN`    | The browser origin allowed by CORS. Defaults to `http://localhost:5173` when unset.       |
+
+`SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` are
+injected by the Edge runtime; do not put them in this file. Never put the
+Anthropic key in `app/.env.local` or in any `VITE_` variable, and never commit
+`supabase/functions/.env` (CI fails if it is tracked).
+
+### Serve and call it
+
+With the stack running:
+
+```bash
+supabase functions serve cluster-feedback --env-file supabase/functions/.env
+```
+
+The function needs a signed-in user's access token. Sign in a local user with
+a password (the seed user `dev@example.com` / `password123` works here) and
+call the function for a cycle in the `cluster` stage of a project where that
+user is the facilitator:
+
+```bash
+ANON_KEY=$(supabase status -o env | grep '^ANON_KEY=' | cut -d= -f2- | tr -d '"')
+TOKEN=$(curl -s -X POST 'http://127.0.0.1:54321/auth/v1/token?grant_type=password' \
+  -H "apikey: $ANON_KEY" -H 'content-type: application/json' \
+  -d '{"email":"dev@example.com","password":"password123"}' \
+  | python3 -c 'import sys, json; print(json.load(sys.stdin)["access_token"])')
+curl -s -X POST http://127.0.0.1:54321/functions/v1/cluster-feedback \
+  -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"cycle_id":"<cycle uuid>"}'
+```
+
+Success is `200` with `{ "run_id", "cluster_count", "clustered_card_count",
+"ungrouped_card_count" }`; refetch the board with `get_cycle_board` to see
+the clusters. Each request writes one JSON log line (codes, ids, timings, and
+token counts only) to the `functions serve` output. Locally the API gateway
+answers CORS itself, so responses through port 54321 show
+`Access-Control-Allow-Origin: *` rather than `ALLOWED_ORIGIN`.
+
+A real call costs money. Without a key, everything up to the model call can
+still be exercised: the request checks, authentication, and the database
+refusals.
+
+### Error codes
+
+Every error is `{ "error": { "code", "message" } }` with a fixed message.
+
+| HTTP | Code                          | Meaning                                                                                  |
+| ---- | ----------------------------- | ---------------------------------------------------------------------------------------- |
+| 405  | `method_not_allowed`          | Not a `POST` (`OPTIONS` is the CORS preflight and gets `204`).                           |
+| 400  | `invalid_request`             | The body is not JSON, is over 1 KB, has a key other than `cycle_id`, or the id is not a UUID. |
+| 401  | `not_authenticated`           | The bearer token is missing, malformed, expired, or rejected by Auth.                     |
+| 403  | `not_project_member`          | The cycle does not exist or the caller is not a member (the same answer for both).       |
+| 403  | `not_project_facilitator`     | The caller is a member but not the facilitator, at the start or at the write.            |
+| 409  | `cycle_not_clustering`        | The cycle is not in the `cluster` stage, at the start or at the write.                   |
+| 409  | `ai_run_in_progress`          | Another run for this cycle started less than 5 minutes ago and has not finished.         |
+| 409  | `clusters_changed_during_run` | Someone changed the clusters while the model was working; nothing was written.           |
+| 409  | `cluster_limit_reached`       | The cycle already has 50 manual clusters.                                                |
+| 413  | `too_many_cards`              | More than 300 cards are available for clustering.                                        |
+| 429  | `ai_run_limit_reached`        | 20 runs of this cycle already reached the model.                                         |
+| 502  | `ai_refused`                  | The model refused, also after the server-side fallback.                                  |
+| 502  | `ai_invalid_output`           | The answer did not parse, did not match the schema, or broke a rule (refs, categories, names, count). |
+| 503  | `ai_unavailable`              | Anthropic returned 429, 529, or 5xx, or could not be reached, after the SDK's retry.     |
+| 504  | `ai_timeout`                  | The call timed out (60 s) after the SDK's retry.                                         |
+| 500  | `ai_not_configured`           | `ANTHROPIC_API_KEY` is not set.                                                          |
+| 500  | `internal_error`              | Anything else, including a rejected write payload and Anthropic 400/401/403/404.         |
+
 ## Local ports
 
 | Service         | URL / port               |

@@ -10,10 +10,51 @@ RLS suite.
 | Unit          | `cd app && npm test`            | Components, hooks, and API wrappers with mocked Supabase. Needs no stack.                                 |
 | pgTAP         | `supabase test db`              | Schema, grants, policies, and RPCs inside Postgres, per migration.                                        |
 | Anon-key RLS  | `cd app && npm run test:rls`    | Multi-user privacy rules through real signed-in anon-key clients, the same path the browser uses.         |
+| Edge Function | `cd supabase/functions/cluster-feedback && deno test` | The `cluster-feedback` handler, prompt, validation, and Anthropic adapter with injected mocks. Needs no stack and no network. |
 
 The RLS suite lives in `app/tests/rls/` and is configured by
 `app/vitest.rls.config.ts`. It runs in Node, loads none of the unit-test setup
 (`src/setupTests.ts`) or mocks (`src/test/*Mock`), and `npm test` excludes it.
+
+## Edge Function tests
+
+The Deno tests live in `supabase/functions/cluster-feedback/tests/` and need
+the Deno CLI ([local-development.md](local-development.md#deno-cli)). From
+`supabase/functions/cluster-feedback/`:
+
+```bash
+deno test        # the tests, with no --allow-* flag
+deno check .     # type check, tests included
+```
+
+and from `supabase/functions/`:
+
+```bash
+deno lint
+```
+
+CI runs all three in the `Edge Functions (Deno)` job.
+
+- **No network.** `deno test` runs without any permission flag, so a test
+  that tried to reach Anthropic, Supabase, or the environment would fail. The
+  first run downloads the pinned npm packages into Deno's cache; that is not
+  a test permission.
+- **Mocks.** The handler takes everything it talks to as injected
+  dependencies (`HandlerDeps` in `handler.ts`): `MockModel` stands in for the
+  `ClusterModel` seam and records each request, `MockDb` records the three
+  RPC calls and returns scripted results or errors, and `MockAuth` accepts or
+  rejects the token. The environment, the clock, and the log sink are plain
+  functions. Provider failures are real SDK error classes
+  (`Anthropic.RateLimitError`, `APIConnectionTimeoutError`, ...) thrown by
+  the mock.
+- **Fixtures.** `tests/fixtures.ts` holds a small synthetic card set and
+  model answers. These are not the evaluation fixtures of #45, which make
+  real model calls.
+- **Logging rule.** Every handler test sends its request through one helper
+  that captures `console.*` and the log sink and checks that the request
+  wrote exactly one JSON line with only the agreed keys, and that no card
+  text, cluster name, ref, system prompt, JWT, user id, or API key reached
+  the log, the console, or the response.
 
 ## Prerequisites
 
