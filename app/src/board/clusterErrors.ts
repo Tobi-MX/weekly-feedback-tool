@@ -18,6 +18,8 @@ export const CLUSTER_ERROR_CODES = [
   'invalid_card_selection',
   'card_not_in_cluster',
   'split_takes_all_cards',
+  // #19b: every cluster write is facilitator-only.
+  'not_project_facilitator',
 ] as const
 
 export type ClusterErrorCode = (typeof CLUSTER_ERROR_CODES)[number] | 'unknown'
@@ -26,6 +28,8 @@ export type ClusterErrorCode = (typeof CLUSTER_ERROR_CODES)[number] | 'unknown'
 export type ClusterOperation = 'save' | 'delete' | 'merge' | 'split'
 
 /** The board's toast copy for each server error. */
+export const FACILITATOR_ONLY_MESSAGE =
+  'Only the facilitator can change clusters.'
 export const CLUSTER_GONE_MESSAGE = 'This cluster no longer exists.'
 export const NOT_CLUSTERING_MESSAGE =
   'Clusters can only be changed during the Cluster stage.'
@@ -76,6 +80,8 @@ export function clusterErrorMessage(
   switch (code) {
     case 'not_project_member':
       return null
+    case 'not_project_facilitator':
+      return FACILITATOR_ONLY_MESSAGE
     case 'cluster_not_found':
       return CLUSTER_GONE_MESSAGE
     case 'cycle_not_clustering':
@@ -110,6 +116,8 @@ export function moveErrorMessage(code: ClusterErrorCode): string | null {
   switch (code) {
     case 'not_project_member':
       return null
+    case 'not_project_facilitator':
+      return FACILITATOR_ONLY_MESSAGE
     case 'card_not_found':
       return CARD_GONE_MESSAGE
     case 'cluster_not_found':

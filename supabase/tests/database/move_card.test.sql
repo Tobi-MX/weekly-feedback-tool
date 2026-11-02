@@ -12,7 +12,10 @@
 -- main cycle: cards from A, B, and D through create_card (attributed and
 -- anonymous), revealed through start_retrospective, moved to cluster through
 -- advance_stage, with clusters from create_cluster; then vote, discuss (as
--- postgres), and closed through close_cycle. Q1 (Q) is C's.
+-- postgres), and closed through close_cycle. Q1 (Q) is C's. Since #19b only
+-- the current facilitator may move cards, so the successful moves run as A
+-- (or as B while A has handed B the role); cluster_facilitator.test.sql
+-- covers the role rule itself.
 
 begin;
 
@@ -126,7 +129,7 @@ language sql
 immutable
 as $$
   select jsonb_build_object(
-    'code', case when p_message = 'not_project_member' then '42501' else 'P0001' end,
+    'code', case when p_message in ('not_project_member', 'not_project_facilitator') then '42501' else 'P0001' end,
     'message', p_message,
     'detail', '',
     'hint', ''
@@ -199,6 +202,17 @@ as $$
 begin
   perform move_test.become(p_user);
   perform 1 from public.close_cycle(move_test.id(p_cycle));
+end;
+$$;
+
+-- transfer_facilitator on P as the user (#19b's parity check).
+create function move_test.transfer(p_user text, p_to text)
+returns void
+language plpgsql
+as $$
+begin
+  perform move_test.become(p_user);
+  perform public.transfer_facilitator(move_test.id('P'), move_test.id(p_to));
 end;
 $$;
 
@@ -505,11 +519,11 @@ select is(
 );
 select is((select (count(*) filter (where a.grantee = 0))::int from pg_proc p left join lateral aclexplode(p.proacl) a on true where p.oid = 'public.move_card(uuid, uuid, integer)'::regprocedure), 0, 'PUBLIC cannot execute move_card');
 select is((select p.prosrc ~ 'from public\.feedback_cycles fc\s+where fc\.id = \w+\s+for update;' from pg_proc p where p.oid = 'public.move_card(uuid, uuid, integer)'::regprocedure), true, 'move_card locks the cycle row FOR UPDATE on public.feedback_cycles');
-select is((select p.prosrc ~* '(cycle_events|card_authors|profiles|created_at|updated_at|is_project_facilitator|owner_id|execute|raise\s+notice)' from pg_proc p where p.oid = 'public.move_card(uuid, uuid, integer)'::regprocedure), false, 'move_card mentions no cycle_events, card_authors, profiles, timestamps, facilitator, owner, dynamic SQL, or notice');
+select is((select p.prosrc ~* '(cycle_events|card_authors|profiles|created_at|updated_at|owner_id|execute|raise\s+notice)' from pg_proc p where p.oid = 'public.move_card(uuid, uuid, integer)'::regprocedure), false, 'move_card mentions no cycle_events, card_authors, profiles, timestamps, owner, dynamic SQL, or notice');
 select is((select p.prosrc ~ '\(select auth\.uid\(\)\) is null' and p.prosrc ~ 'private\.is_project_member\(cycle_project\)' from pg_proc p where p.oid = 'public.move_card(uuid, uuid, integer)'::regprocedure), true, 'move_card checks (select auth.uid()) and uses private.is_project_member');
 select is(
   (select array_agg(distinct m.msg[1]::text order by m.msg[1]::text) from pg_proc p cross join lateral regexp_matches(p.prosrc, 'message\s*=\s*''([^'']*)''', 'g') as m(msg) where p.oid = 'public.move_card(uuid, uuid, integer)'::regprocedure),
-  array['card_not_found', 'cluster_not_found', 'cycle_not_clustering', 'invalid_card_position', 'not_project_member'],
+  array['card_not_found', 'cluster_not_found', 'cycle_not_clustering', 'invalid_card_position', 'not_project_facilitator', 'not_project_member'],
   'move_card raises exactly the messages of the error table'
 );
 select is(
@@ -539,14 +553,14 @@ select is((select count(*)::int from pg_views where schemaname = 'public'), 0, '
 -- ---------------------------------------------------------------------------
 select move_test.mark();
 set local role authenticated;
-select is(move_test.mv('B', 'a', null, null), move_test.e('cycle_not_clustering'), 'collecting: move_card gets cycle_not_clustering');
+select is(move_test.mv('A', 'a', null, null), move_test.e('cycle_not_clustering'), 'collecting: move_card gets cycle_not_clustering');
 select move_test.start('A', 'P1');
-select is(move_test.mv('B', 'a', null, null), move_test.e('cycle_not_clustering'), 'reveal: move_card gets cycle_not_clustering');
+select is(move_test.mv('A', 'a', null, null), move_test.e('cycle_not_clustering'), 'reveal: move_card gets cycle_not_clustering');
 select move_test.snap('board before', move_test.board('B'));
 select move_test.advance('A', 'P1', 'reveal');
 select move_test.mk('A', 'X');
-select move_test.mk('B', 'Y');
-select move_test.mk('D', 'Z');
+select move_test.mk('A', 'Y');
+select move_test.mk('A', 'Z');
 select move_test.mk('A', 'Gone');
 select move_test.del('A', 'Gone');
 reset role;
@@ -556,7 +570,7 @@ reset role;
 -- ---------------------------------------------------------------------------
 select move_test.mark();
 set local role authenticated;
-select is(move_test.mv('B', 'a', 'X', null), move_test.ok(), 'B moves an ungrouped card into empty cluster X');
+select is(move_test.mv('A', 'a', 'X', null), move_test.ok(), 'A moves an ungrouped card into empty cluster X');
 select is(move_test.list('X'), array['a'], 'the card is in X');
 select is(move_test.orders('X'), array[0], 'with sort_order 0');
 select is(move_test.board_list(move_test.board('B'), 'X'), array['a'], 'get_cycle_board lists it in X');
@@ -566,18 +580,18 @@ select is((select count(*)::int from jsonb_array_elements(move_test.new_events()
 select is(move_test.new_other_events(), 0, 'and no other cycle''s events');
 
 set local role authenticated;
-select move_test.mv('B', 'b', 'X', null);
-select move_test.mv('B', 'c', 'X', null);
+select move_test.mv('A', 'b', 'X', null);
+select move_test.mv('A', 'c', 'X', null);
 select is(move_test.list('X'), array['a', 'b', 'c'], 'X = [a, b, c]');
-select is(move_test.mv('B', 'a', 'X', 2), move_test.ok(), 'move_card(a, X, 2)');
+select is(move_test.mv('A', 'a', 'X', 2), move_test.ok(), 'move_card(a, X, 2)');
 select is(move_test.list('X'), array['b', 'c', 'a'], 'gives [b, c, a]');
 select is(move_test.orders('X'), array[0, 1, 2], 'numbered 0 .. 2');
-select move_test.mv('B', 'a', 'X', 0);
+select move_test.mv('A', 'a', 'X', 0);
 select is(move_test.list('X'), array['a', 'b', 'c'], 'move_card(a, X, 0) restores [a, b, c]');
-select is(move_test.mv('D', 'c', 'X', 0), move_test.ok(), 'move_card(c, X, 0)');
+select is(move_test.mv('A', 'c', 'X', 0), move_test.ok(), 'move_card(c, X, 0)');
 select is(move_test.list('X'), array['c', 'a', 'b'], 'gives [c, a, b]');
 select is(move_test.orders('X'), array[0, 1, 2], 'numbered 0 .. 2');
-select move_test.mv('D', 'c', 'X', 2);
+select move_test.mv('A', 'c', 'X', 2);
 select is(move_test.list('X'), array['a', 'b', 'c'], 'move_card(c, X, 2) restores [a, b, c]');
 select is(move_test.mv('A', 'd', 'X', 1), move_test.ok(), 'move_card(d, X, 1) from Ungrouped');
 select is(move_test.list('X'), array['a', 'd', 'b', 'c'], 'gives [a, d, b, c]');
@@ -593,14 +607,14 @@ select is(move_test.mv('A', 'd', 'X', null), move_test.ok(), 'move_card(d, X, nu
 select is(move_test.list('X'), array['a', 'b', 'c', 'd'], 'appends: [a, b, c, d]');
 select move_test.mv('A', 'd', null, null);
 
-select move_test.mv('B', 'e', 'Y', null);
-select is(move_test.mv('B', 'b', 'Y', 0), move_test.ok(), 'b moves from X to Y at position 0');
+select move_test.mv('A', 'e', 'Y', null);
+select is(move_test.mv('A', 'b', 'Y', 0), move_test.ok(), 'b moves from X to Y at position 0');
 select is(move_test.list('X'), array['a', 'c'], 'X = [a, c]');
 select is(move_test.orders('X'), array[0, 1], 'X numbered 0, 1');
 select is(move_test.list('Y'), array['b', 'e'], 'Y has b first');
 select is(move_test.orders('Y'), array[0, 1], 'Y numbered 0, 1');
 
-select is(move_test.mv('D', 'c', null, null), move_test.ok(), 'c to Ungrouped');
+select is(move_test.mv('A', 'c', null, null), move_test.ok(), 'c to Ungrouped');
 reset role;
 select is((select count(*)::int from public.cluster_cards where card_id = move_test.id('c')), 0, 'its cluster_cards row is gone');
 select is(move_test.orders('X'), array[0], 'its old cluster is renumbered');
@@ -620,7 +634,7 @@ values
 select move_test.snap('Y rows', to_jsonb(move_test.rows_of('Y')));
 select move_test.snap('Z old', to_jsonb(move_test.list('Z')));
 set local role authenticated;
-select is(move_test.mv('B', 'f', 'Z', 1), move_test.ok(), 'f moves into Z with duplicate sort_order 0');
+select is(move_test.mv('A', 'f', 'Z', 1), move_test.ok(), 'f moves into Z with duplicate sort_order 0');
 reset role;
 select is(
   move_test.list('Z'),
@@ -646,11 +660,11 @@ values
   (move_test.id('P1'), move_test.id('AI3'), move_test.id('i'), 0),
   (move_test.id('P1'), move_test.id('AI3'), move_test.id('j'), 1);
 set local role authenticated;
-select move_test.mv('B', 'g', 'AI2', null);
+select move_test.mv('A', 'g', 'AI2', null);
 reset role;
 select is(array[move_test.source('AI1'), move_test.source('AI2')], array['manual', 'manual'], 'a move from one AI cluster to another makes both manual');
 set local role authenticated;
-select move_test.mv('D', 'j', 'AI3', 0);
+select move_test.mv('A', 'j', 'AI3', 0);
 reset role;
 select is(move_test.list('AI3'), array['j', 'i'], 'a reorder inside AI three');
 select is(move_test.source('AI3'), 'manual', 'makes it manual');
@@ -668,24 +682,27 @@ update public.clusters set source = 'ai' where id = move_test.id('AI3');
 select move_test.snap('state', to_jsonb(move_test.state()));
 select move_test.mark();
 set local role authenticated;
-select is(move_test.mv('B', 'h', null, null), move_test.ok(), 'an ungrouped card to Ungrouped succeeds');
-select is(move_test.mv('B', 'j', 'AI3', 0), move_test.ok(), 'a card to its current index succeeds');
-select is(move_test.mv('B', 'i', 'AI3', 99), move_test.ok(), 'a card to a clamped index equal to its last place succeeds');
-select is(move_test.mv('B', 'i', 'AI3', null), move_test.ok(), 'a card to the end where it already is succeeds');
+select is(move_test.mv('A', 'h', null, null), move_test.ok(), 'an ungrouped card to Ungrouped succeeds');
+select is(move_test.mv('A', 'j', 'AI3', 0), move_test.ok(), 'a card to its current index succeeds');
+select is(move_test.mv('A', 'i', 'AI3', 99), move_test.ok(), 'a card to a clamped index equal to its last place succeeds');
+select is(move_test.mv('A', 'i', 'AI3', null), move_test.ok(), 'a card to the end where it already is succeeds');
 reset role;
 select is(to_jsonb(move_test.state()), move_test.snapped('state'), 'the no-ops changed no row, source, or updated_at');
 select is(move_test.source('AI3'), 'ai', 'AI three is still ai');
 select is(move_test.new_events(), '[]'::jsonb, 'the no-ops recorded no event');
 
 -- ---------------------------------------------------------------------------
--- A and B get identical results; own anonymous and others' attributed cards
--- behave the same.
+-- A (owner and facilitator) and B (facilitator after a transfer) get
+-- identical results; own anonymous and others' attributed cards behave the
+-- same.
 -- ---------------------------------------------------------------------------
 set local role authenticated;
 select move_test.snap('sequence A', move_test.sequence('A'));
+select move_test.transfer('A', 'B');
 select move_test.snap('sequence B', move_test.sequence('B'));
+select move_test.transfer('A', 'A');
 reset role;
-select is(move_test.snapped('sequence A'), move_test.snapped('sequence B'), 'the owner/facilitator and a member get identical results');
+select is(move_test.snapped('sequence A'), move_test.snapped('sequence B'), 'the owner as facilitator and a member as facilitator get identical results');
 select is((select bool_and(s -> 'result' = move_test.ok()) from jsonb_array_elements(move_test.snapped('sequence B')) s), true, 'B moves its own anonymous card and A''s attributed card alike');
 select is(move_test.snapped('sequence B') -> 5 -> 'X', '["k", "m", "a"]'::jsonb, 'the sequence ends with the expected X');
 select is(move_test.one_cluster_each(), true, 'every card is still in at most one cluster');
@@ -699,14 +716,14 @@ set local role authenticated;
 select is(move_test.mv(null, 'a', 'X', null), move_test.e('not_project_member'), 'a null auth.uid() gets not_project_member');
 select is(move_test.mv_raw('B', null, move_test.id('X'), null), move_test.e('card_not_found'), 'a null card id gets card_not_found');
 select is(move_test.mv_raw('B', gen_random_uuid(), move_test.id('X'), null), move_test.e('card_not_found'), 'a random card id gets card_not_found');
-select is(move_test.mv('B', 'q', 'X', null), move_test.e('card_not_found'), 'a card of project Q gets card_not_found');
+select is(move_test.mv('A', 'q', 'X', null), move_test.e('card_not_found'), 'a card of project Q gets card_not_found');
 select is(move_test.mv('C', 'a', 'X', null), move_test.e('card_not_found'), 'non-member C moving P''s card gets card_not_found');
 select is(move_test.mv('C', 'a', 'X', null), move_test.mv_raw('C', gen_random_uuid(), move_test.id('X'), null), 'the error is identical for an existing and a random card id');
-select is(move_test.mv_raw('B', move_test.id('a'), gen_random_uuid(), null), move_test.e('cluster_not_found'), 'a random cluster id gets cluster_not_found');
-select is(move_test.mv('B', 'a', 'Gone', null), move_test.e('cluster_not_found'), 'a deleted cluster gets cluster_not_found');
-select is(move_test.mv('B', 'a', 'P0 cluster', null), move_test.e('cluster_not_found'), 'a cluster of another cycle of P gets cluster_not_found');
-select is(move_test.mv('B', 'a', 'X', -1), move_test.e('invalid_card_position'), 'position -1 gets invalid_card_position');
-select is(move_test.mv('B', 'a', null, 0), move_test.e('invalid_card_position'), 'position 0 with a null target gets invalid_card_position');
+select is(move_test.mv_raw('A', move_test.id('a'), gen_random_uuid(), null), move_test.e('cluster_not_found'), 'a random cluster id gets cluster_not_found');
+select is(move_test.mv('A', 'a', 'Gone', null), move_test.e('cluster_not_found'), 'a deleted cluster gets cluster_not_found');
+select is(move_test.mv('A', 'a', 'P0 cluster', null), move_test.e('cluster_not_found'), 'a cluster of another cycle of P gets cluster_not_found');
+select is(move_test.mv('A', 'a', 'X', -1), move_test.e('invalid_card_position'), 'position -1 gets invalid_card_position');
+select is(move_test.mv('A', 'a', null, 0), move_test.e('invalid_card_position'), 'position 0 with a null target gets invalid_card_position');
 reset role;
 select is(to_jsonb(move_test.state()), move_test.snapped('state'), 'after every failure the rows are unchanged');
 select is(move_test.new_events(), '[]'::jsonb, 'the failures recorded no event');
@@ -720,18 +737,18 @@ reset role;
 select move_test.snap('state', to_jsonb(move_test.state()));
 select move_test.mark();
 set local role authenticated;
-select is(move_test.mv('B', 'a', 'Y', null), move_test.e('cycle_not_clustering'), 'vote: a move into a cluster gets cycle_not_clustering');
-select is(move_test.mv('B', 'a', null, null), move_test.e('cycle_not_clustering'), 'vote: a move to Ungrouped gets cycle_not_clustering');
+select is(move_test.mv('A', 'a', 'Y', null), move_test.e('cycle_not_clustering'), 'vote: a move into a cluster gets cycle_not_clustering');
+select is(move_test.mv('A', 'a', null, null), move_test.e('cycle_not_clustering'), 'vote: a move to Ungrouped gets cycle_not_clustering');
 reset role;
 update public.feedback_cycles set status = 'discuss', voting_closed_at = now() where id = move_test.id('P1');
 select move_test.mark();
 set local role authenticated;
-select is(move_test.mv('B', 'a', 'Y', null), move_test.e('cycle_not_clustering'), 'discuss: move_card gets cycle_not_clustering');
+select is(move_test.mv('A', 'a', 'Y', null), move_test.e('cycle_not_clustering'), 'discuss: move_card gets cycle_not_clustering');
 select move_test.close('A', 'P1');
 reset role;
 select move_test.mark();
 set local role authenticated;
-select is(move_test.mv('B', 'a', 'Y', null), move_test.e('cycle_not_clustering'), 'closed after reveal: move_card gets cycle_not_clustering');
+select is(move_test.mv('A', 'a', 'Y', null), move_test.e('cycle_not_clustering'), 'closed after reveal: move_card gets cycle_not_clustering');
 reset role;
 select is(to_jsonb(move_test.state()), move_test.snapped('state'), 'vote, discuss, and closed: the rows are unchanged');
 select is(move_test.new_events(), '[]'::jsonb, 'the refused calls recorded no event');

@@ -9,7 +9,9 @@
 --
 -- Fixtures: owner and facilitator A, members B and D, non-member C. Project P
 -- is owned by A with B and D joined; project Q is owned by C, and none of A,
--- B, or D is ever in Q.
+-- B, or D is ever in Q. Since #19b only the current facilitator may write
+-- clusters, so the successful writes run as A (or as B while A has handed B
+-- the role); cluster_facilitator.test.sql covers the role rule itself.
 --
 -- Cycles. P0 (P) gets a card, a cluster inserted as postgres while
 -- collecting, and is then closed from collecting. P1 (P) is the main cycle:
@@ -106,7 +108,7 @@ language sql
 immutable
 as $$
   select jsonb_build_object(
-    'code', case when p_message = 'not_project_member' then '42501' else 'P0001' end,
+    'code', case when p_message in ('not_project_member', 'not_project_facilitator') then '42501' else 'P0001' end,
     'message', p_message,
     'detail', '',
     'hint', ''
@@ -268,6 +270,17 @@ as $$
 begin
   perform cluster_test.become(p_user);
   perform 1 from public.close_cycle(p_cycle);
+end;
+$$;
+
+-- transfer_facilitator as the user (#19b's parity checks).
+create function cluster_test.transfer(p_user text, p_project text, p_to text)
+returns void
+language plpgsql
+as $$
+begin
+  perform cluster_test.become(p_user);
+  perform public.transfer_facilitator(cluster_test.id(p_project), cluster_test.id(p_to));
 end;
 $$;
 
@@ -456,8 +469,9 @@ as $$
   select s.body from cluster_test.snaps s where s.label = p_label;
 $$;
 
--- Every wrong-stage case for a cycle and one of its clusters: each RPC must
--- fail with cycle_not_clustering. Returns the cases that did not.
+-- Every wrong-stage case for a cycle and one of its clusters: each RPC, called
+-- by the facilitator A, must fail with cycle_not_clustering. Returns the cases
+-- that did not.
 create function cluster_test.wrong_stage(p_cycle uuid, p_cluster uuid)
 returns text[]
 language plpgsql
@@ -465,13 +479,13 @@ as $$
 declare
   result text[] := '{}';
 begin
-  if cluster_test.mk_err('B', p_cycle, 'Late cluster') is distinct from cluster_test.e('cycle_not_clustering') then
+  if cluster_test.mk_err('A', p_cycle, 'Late cluster') is distinct from cluster_test.e('cycle_not_clustering') then
     result := result || 'create'::text;
   end if;
-  if cluster_test.ren_err('B', p_cluster, 'Late name') is distinct from cluster_test.e('cycle_not_clustering') then
+  if cluster_test.ren_err('A', p_cluster, 'Late name') is distinct from cluster_test.e('cycle_not_clustering') then
     result := result || 'rename'::text;
   end if;
-  if cluster_test.del('B', p_cluster) is distinct from cluster_test.e('cycle_not_clustering') then
+  if cluster_test.del('A', p_cluster) is distinct from cluster_test.e('cycle_not_clustering') then
     result := result || 'delete'::text;
   end if;
   return result;
@@ -667,10 +681,10 @@ select is(
 ) from cluster_test.rpcs r order by r.name;
 select is((select (count(*) filter (where a.grantee = 0))::int from pg_proc p left join lateral aclexplode(p.proacl) a on true where p.oid = r.fn), 0, 'PUBLIC cannot execute ' || r.name) from cluster_test.rpcs r order by r.name;
 select is((select p.prosrc ~ 'from public\.feedback_cycles fc\s+where fc\.id = \w+\s+for update;' from pg_proc p where p.oid = r.fn), true, r.name || ' locks the cycle row FOR UPDATE on public.feedback_cycles') from cluster_test.rpcs r order by r.name;
-select is((select p.prosrc ~* '(cycle_events|card_authors|profiles|is_project_facilitator|owner_id|execute|raise\s+notice)' from pg_proc p where p.oid = r.fn), false, r.name || ' mentions no cycle_events, card_authors, profiles, facilitator, owner, dynamic SQL, or notice') from cluster_test.rpcs r order by r.name;
+select is((select p.prosrc ~* '(cycle_events|card_authors|profiles|owner_id|execute|raise\s+notice)' from pg_proc p where p.oid = r.fn), false, r.name || ' mentions no cycle_events, card_authors, profiles, owner, dynamic SQL, or notice') from cluster_test.rpcs r order by r.name;
 select is((select p.prosrc ~ '\(select auth\.uid\(\)\) is null' and p.prosrc ~ 'private\.is_project_member\(cycle_project\)' from pg_proc p where p.oid = r.fn), true, r.name || ' checks (select auth.uid()) and uses private.is_project_member') from cluster_test.rpcs r order by r.name;
 select is(
-  (select array_agg(distinct m.msg[1]::text) <@ array['not_project_member', 'cluster_not_found', 'cycle_not_clustering', 'invalid_cluster_name', 'cluster_name_taken', 'cluster_limit_reached'] from pg_proc p cross join lateral regexp_matches(p.prosrc, 'message\s*=\s*''([^'']*)''', 'g') as m(msg) where p.oid = r.fn),
+  (select array_agg(distinct m.msg[1]::text) <@ array['not_project_member', 'not_project_facilitator', 'cluster_not_found', 'cycle_not_clustering', 'invalid_cluster_name', 'cluster_name_taken', 'cluster_limit_reached'] from pg_proc p cross join lateral regexp_matches(p.prosrc, 'message\s*=\s*''([^'']*)''', 'g') as m(msg) where p.oid = r.fn),
   true,
   r.name || ' raises only the messages of the error table'
 ) from cluster_test.rpcs r order by r.name;
@@ -768,23 +782,23 @@ select cluster_test.mark();
 -- Create, order, and events.
 -- ---------------------------------------------------------------------------
 set local role authenticated;
-select cluster_test.snap('Process row', cluster_test.mk('B', cluster_test.id('P1'), '  Process  ', 'Process'));
+select cluster_test.snap('Process row', cluster_test.mk('A', cluster_test.id('P1'), '  Process  ', 'Process'));
 select is(
   cluster_test.snapped('Process row'),
   jsonb_build_array(jsonb_build_object('cluster_id', cluster_test.id('Process'), 'name', 'Process', 'source', 'manual')),
-  'B creates "  Process  ": the call returns (id, Process, manual)'
+  'A creates "  Process  ": the call returns (id, Process, manual)'
 );
 reset role;
 select is((cluster_test.row_of(cluster_test.id('Process')) ->> 'sort_order')::int, 1, 'Process has sort_order 1');
 select is(cluster_test.new_events(cluster_test.id('P1')), cluster_test.one_event('cluster'), 'create_cluster records exactly one clusters_changed row with null actor and empty payload');
 select cluster_test.mark();
 set local role authenticated;
-select is(cluster_test.mk('D', cluster_test.id('P1'), 'Tools', 'Tools') -> 0 ->> 'name', 'Tools', 'D creates Tools');
+select is(cluster_test.mk('A', cluster_test.id('P1'), 'Tools', 'Tools') -> 0 ->> 'name', 'Tools', 'A creates Tools');
 reset role;
 select is((cluster_test.row_of(cluster_test.id('Tools')) ->> 'sort_order')::int, 2, 'Tools has sort_order 2');
 select cluster_test.mark();
 set local role authenticated;
-select is(cluster_test.del('B', cluster_test.id('Process')), to_jsonb('ok'::text), 'B deletes the empty Process');
+select is(cluster_test.del('A', cluster_test.id('Process')), to_jsonb('ok'::text), 'A deletes the empty Process');
 reset role;
 select is(cluster_test.row_of(cluster_test.id('Process')), null, 'Process is gone');
 select is(cluster_test.new_events(cluster_test.id('P1')), cluster_test.one_event('cluster'), 'deleting an empty cluster records exactly one event');
@@ -795,24 +809,34 @@ select is((cluster_test.row_of(cluster_test.id('Docs')) ->> 'sort_order')::int, 
 select is(cluster_test.new_other_events(cluster_test.id('P1')), 0, 'no event for another cycle so far');
 
 -- ---------------------------------------------------------------------------
--- A (owner and facilitator) and B (member) behave identically.
+-- A (owner and facilitator) and B (facilitator after a transfer) behave
+-- identically: the role, not ownership, decides, and A gets the same results
+-- before and after the role comes back.
 -- ---------------------------------------------------------------------------
 set local role authenticated;
 select cluster_test.snap('parity A', cluster_test.mk('A', cluster_test.id('P1'), 'Parity A', 'Parity A'));
+select cluster_test.transfer('A', 'P', 'B');
 select cluster_test.snap('parity B', cluster_test.mk('B', cluster_test.id('P1'), 'Parity B', 'Parity B'));
 select is(
   jsonb_build_array(cluster_test.snapped('parity A') -> 0 ->> 'name', cluster_test.snapped('parity A') -> 0 ->> 'source', cluster_test.snapped('parity B') -> 0 ->> 'name', cluster_test.snapped('parity B') -> 0 ->> 'source'),
   '["Parity A", "manual", "Parity B", "manual"]'::jsonb,
-  'A and B each create a manual cluster and get the same row shape'
+  'A (facilitator) and then B (facilitator) each create a manual cluster and get the same row shape'
 );
-select is(cluster_test.ren('A', cluster_test.id('Parity B'), 'Parity B by A') -> 0 ->> 'name', 'Parity B by A', 'A renames B''s cluster');
-select is(cluster_test.ren('B', cluster_test.id('Parity A'), 'Parity A by B') -> 0 ->> 'name', 'Parity A by B', 'B renames A''s cluster');
-select is(cluster_test.mk_err('A', cluster_test.id('P1'), 'parity a by b'), cluster_test.mk_err('B', cluster_test.id('P1'), 'parity a by b'), 'A and B get the same cluster_name_taken');
-select is(cluster_test.mk_err('A', cluster_test.id('P1'), ''), cluster_test.mk_err('B', cluster_test.id('P1'), ''), 'A and B get the same invalid_cluster_name');
-select is(cluster_test.ren_err('A', gen_random_uuid(), 'x'), cluster_test.ren_err('B', gen_random_uuid(), 'x'), 'A and B get the same cluster_not_found on rename');
+select is(cluster_test.ren('B', cluster_test.id('Parity A'), 'Parity A by B') -> 0 ->> 'name', 'Parity A by B', 'B, as facilitator, renames A''s cluster');
+select cluster_test.snap('B taken', cluster_test.mk_err('B', cluster_test.id('P1'), 'parity a by b'));
+select cluster_test.snap('B invalid', cluster_test.mk_err('B', cluster_test.id('P1'), ''));
+select cluster_test.snap('B not found', cluster_test.ren_err('B', gen_random_uuid(), 'x'));
+select cluster_test.transfer('A', 'P', 'A');
+select is(cluster_test.ren('A', cluster_test.id('Parity B'), 'Parity B by A') -> 0 ->> 'name', 'Parity B by A', 'A, facilitator again, renames B''s cluster');
+select is(cluster_test.mk_err('A', cluster_test.id('P1'), 'parity a by b'), cluster_test.snapped('B taken'), 'A and B get the same cluster_name_taken');
+select is(cluster_test.mk_err('A', cluster_test.id('P1'), ''), cluster_test.snapped('B invalid'), 'A and B get the same invalid_cluster_name');
+select is(cluster_test.ren_err('A', gen_random_uuid(), 'x'), cluster_test.snapped('B not found'), 'A and B get the same cluster_not_found on rename');
 select is(cluster_test.del('A', cluster_test.id('Parity B')), to_jsonb('ok'::text), 'A deletes the cluster B created');
-select is(cluster_test.del('B', cluster_test.id('Parity A')), to_jsonb('ok'::text), 'B deletes the cluster A created');
-select is(cluster_test.del('A', cluster_test.id('Parity A')), cluster_test.del('B', cluster_test.id('Parity B')), 'A and B get the same cluster_not_found on delete');
+select cluster_test.transfer('A', 'P', 'B');
+select is(cluster_test.del('B', cluster_test.id('Parity A')), to_jsonb('ok'::text), 'B, as facilitator, deletes the cluster A created');
+select cluster_test.snap('B delete gone', cluster_test.del('B', cluster_test.id('Parity B')));
+select cluster_test.transfer('A', 'P', 'A');
+select is(cluster_test.del('A', cluster_test.id('Parity A')), cluster_test.snapped('B delete gone'), 'A and B get the same cluster_not_found on delete');
 reset role;
 
 -- ---------------------------------------------------------------------------
@@ -821,36 +845,36 @@ reset role;
 select cluster_test.mark();
 select cluster_test.snap('P1 names state', to_jsonb(cluster_test.state(cluster_test.id('P1'))));
 set local role authenticated;
-select is(cluster_test.mk_err('B', cluster_test.id('P1'), null), cluster_test.e('invalid_cluster_name'), 'a null name gets invalid_cluster_name');
-select is(cluster_test.mk_err('B', cluster_test.id('P1'), ''), cluster_test.e('invalid_cluster_name'), 'an empty name gets invalid_cluster_name');
-select is(cluster_test.mk_err('B', cluster_test.id('P1'), '   '), cluster_test.e('invalid_cluster_name'), 'a blank name gets invalid_cluster_name');
-select is(cluster_test.mk_err('B', cluster_test.id('P1'), repeat('x', 101)), cluster_test.e('invalid_cluster_name'), 'a 101-character name gets invalid_cluster_name');
-select is(cluster_test.mk_err('B', cluster_test.id('P1'), 'a' || E'\n' || 'b'), cluster_test.e('invalid_cluster_name'), 'a name with a line break gets invalid_cluster_name');
-select is(cluster_test.mk_err('B', cluster_test.id('P1'), 'a' || E'\t' || 'b'), cluster_test.e('invalid_cluster_name'), 'a name with a tab inside gets invalid_cluster_name');
-select is(cluster_test.mk_err('B', cluster_test.id('P1'), 'tools'), cluster_test.e('cluster_name_taken'), 'tools next to Tools gets cluster_name_taken');
-select is(cluster_test.ren_err('B', cluster_test.id('Docs'), ' TOOLS '), cluster_test.e('cluster_name_taken'), 'renaming Docs to TOOLS gets cluster_name_taken');
-select is(cluster_test.ren_err('B', cluster_test.id('Docs'), E'\t'), cluster_test.e('invalid_cluster_name'), 'renaming to a blank name gets invalid_cluster_name');
+select is(cluster_test.mk_err('A', cluster_test.id('P1'), null), cluster_test.e('invalid_cluster_name'), 'a null name gets invalid_cluster_name');
+select is(cluster_test.mk_err('A', cluster_test.id('P1'), ''), cluster_test.e('invalid_cluster_name'), 'an empty name gets invalid_cluster_name');
+select is(cluster_test.mk_err('A', cluster_test.id('P1'), '   '), cluster_test.e('invalid_cluster_name'), 'a blank name gets invalid_cluster_name');
+select is(cluster_test.mk_err('A', cluster_test.id('P1'), repeat('x', 101)), cluster_test.e('invalid_cluster_name'), 'a 101-character name gets invalid_cluster_name');
+select is(cluster_test.mk_err('A', cluster_test.id('P1'), 'a' || E'\n' || 'b'), cluster_test.e('invalid_cluster_name'), 'a name with a line break gets invalid_cluster_name');
+select is(cluster_test.mk_err('A', cluster_test.id('P1'), 'a' || E'\t' || 'b'), cluster_test.e('invalid_cluster_name'), 'a name with a tab inside gets invalid_cluster_name');
+select is(cluster_test.mk_err('A', cluster_test.id('P1'), 'tools'), cluster_test.e('cluster_name_taken'), 'tools next to Tools gets cluster_name_taken');
+select is(cluster_test.ren_err('A', cluster_test.id('Docs'), ' TOOLS '), cluster_test.e('cluster_name_taken'), 'renaming Docs to TOOLS gets cluster_name_taken');
+select is(cluster_test.ren_err('A', cluster_test.id('Docs'), E'\t'), cluster_test.e('invalid_cluster_name'), 'renaming to a blank name gets invalid_cluster_name');
 reset role;
 select is(to_jsonb(cluster_test.state(cluster_test.id('P1'))), cluster_test.snapped('P1 names state'), 'refused names change nothing');
 select is(cluster_test.new_events(cluster_test.id('P1')), '[]'::jsonb, 'refused names record no event');
 set local role authenticated;
-select is(cluster_test.mk('B', cluster_test.id('P1'), repeat('y', 100), 'Long') -> 0 ->> 'name', repeat('y', 100), 'exactly 100 characters succeeds');
-select is(cluster_test.mk('B', cluster_test.id('P1'), 'Process', 'Process again') -> 0 ->> 'name', 'Process', 'Process can be created again after its delete');
-select is(cluster_test.mk_err('B', cluster_test.id('P1'), 'PROCESS'), cluster_test.e('cluster_name_taken'), 'PROCESS next to Process gets cluster_name_taken');
-select is(cluster_test.mk('B', cluster_test.id('P1'), 'Ungrouped', 'Ungrouped') -> 0 ->> 'name', 'Ungrouped', 'Ungrouped is an ordinary name on the server');
+select is(cluster_test.mk('A', cluster_test.id('P1'), repeat('y', 100), 'Long') -> 0 ->> 'name', repeat('y', 100), 'exactly 100 characters succeeds');
+select is(cluster_test.mk('A', cluster_test.id('P1'), 'Process', 'Process again') -> 0 ->> 'name', 'Process', 'Process can be created again after its delete');
+select is(cluster_test.mk_err('A', cluster_test.id('P1'), 'PROCESS'), cluster_test.e('cluster_name_taken'), 'PROCESS next to Process gets cluster_name_taken');
+select is(cluster_test.mk('A', cluster_test.id('P1'), 'Ungrouped', 'Ungrouped') -> 0 ->> 'name', 'Ungrouped', 'Ungrouped is an ordinary name on the server');
 reset role;
 
 -- ---------------------------------------------------------------------------
 -- The 50-cluster limit.
 -- ---------------------------------------------------------------------------
 set local role authenticated;
-select is(cluster_test.fill('B', cluster_test.id('P1'), 50), 50, 'B fills P1 up to 50 clusters');
+select is(cluster_test.fill('A', cluster_test.id('P1'), 50), 50, 'A fills P1 up to 50 clusters');
 reset role;
 select cluster_test.mark();
 set local role authenticated;
-select is(cluster_test.mk_err('B', cluster_test.id('P1'), 'Fifty-first'), cluster_test.e('cluster_limit_reached'), 'the 51st create_cluster gets cluster_limit_reached');
-select is(cluster_test.mk_err('A', cluster_test.id('P1'), 'Fifty-first'), cluster_test.e('cluster_limit_reached'), 'A gets cluster_limit_reached too');
-select is(cluster_test.mk_err('B', cluster_test.id('P1'), 'tools'), cluster_test.e('cluster_name_taken'), 'at the limit, a taken name is still reported first');
+select is(cluster_test.mk_err('A', cluster_test.id('P1'), 'Fifty-first'), cluster_test.e('cluster_limit_reached'), 'the 51st create_cluster gets cluster_limit_reached');
+select is(cluster_test.mk_err('D', cluster_test.id('P1'), 'Fifty-first'), cluster_test.e('not_project_facilitator'), 'member D, not the facilitator, gets not_project_facilitator at the limit too');
+select is(cluster_test.mk_err('A', cluster_test.id('P1'), 'tools'), cluster_test.e('cluster_name_taken'), 'at the limit, a taken name is still reported first');
 reset role;
 select is(cluster_test.cluster_count(cluster_test.id('P1')), 50, 'the cluster count stays 50');
 select is(cluster_test.new_events(cluster_test.id('P1')), '[]'::jsonb, 'the refused 51st create records no event');
@@ -866,20 +890,20 @@ values
 select cluster_test.mark();
 set local role authenticated;
 select is(
-  cluster_test.ren('D', cluster_test.id('Tools'), ' Tooling '),
+  cluster_test.ren('A', cluster_test.id('Tools'), ' Tooling '),
   jsonb_build_array(jsonb_build_object('cluster_id', cluster_test.id('Tools'), 'name', 'Tooling', 'source', 'manual')),
   'Tools -> Tooling returns the new name and source manual'
 );
 reset role;
 select is(cluster_test.new_events(cluster_test.id('P1')), cluster_test.one_event('cluster'), 'a real rename records exactly one event');
 set local role authenticated;
-select is(cluster_test.ren('B', cluster_test.id('AI one'), 'AI renamed') -> 0 ->> 'source', 'manual', 'an AI cluster becomes manual when renamed');
+select is(cluster_test.ren('A', cluster_test.id('AI one'), 'AI renamed') -> 0 ->> 'source', 'manual', 'an AI cluster becomes manual when renamed');
 reset role;
 select is(cluster_test.row_of(cluster_test.id('AI one')) ->> 'source', 'manual', 'the stored source is manual');
 select cluster_test.mark();
 set local role authenticated;
 select is(
-  cluster_test.ren('B', cluster_test.id('AI two'), '  AI two  '),
+  cluster_test.ren('A', cluster_test.id('AI two'), '  AI two  '),
   jsonb_build_array(jsonb_build_object('cluster_id', cluster_test.id('AI two'), 'name', 'AI two', 'source', 'ai')),
   'renaming to its own current name returns the row with source ai'
 );
@@ -888,12 +912,12 @@ select is((cluster_test.row_of(cluster_test.id('AI two')) ->> 'updated_at')::tim
 select is(cluster_test.row_of(cluster_test.id('AI two')) ->> 'source', 'ai', 'the no-op rename leaves source ai');
 select is(cluster_test.new_events(cluster_test.id('P1')), '[]'::jsonb, 'the no-op rename records no event');
 set local role authenticated;
-select is(cluster_test.ren('B', cluster_test.id('Tools'), 'tooling') -> 0 ->> 'name', 'tooling', 'Tooling -> tooling (case only) is a real rename');
+select is(cluster_test.ren('A', cluster_test.id('Tools'), 'tooling') -> 0 ->> 'name', 'tooling', 'Tooling -> tooling (case only) is a real rename');
 reset role;
 select is(cluster_test.new_events(cluster_test.id('P1')), cluster_test.one_event('cluster'), 'the case-only rename records an event');
 set local role authenticated;
-select is(cluster_test.ren('B', cluster_test.id('Tools'), 'Tooling') -> 0 ->> 'name', 'Tooling', 'tooling -> Tooling (case only) is a real rename');
-select is(cluster_test.ren_err('B', cluster_test.id('Tools'), 'ai TWO'), cluster_test.e('cluster_name_taken'), 'renaming to another cluster''s name in any case gets cluster_name_taken');
+select is(cluster_test.ren('A', cluster_test.id('Tools'), 'Tooling') -> 0 ->> 'name', 'Tooling', 'tooling -> Tooling (case only) is a real rename');
+select is(cluster_test.ren_err('A', cluster_test.id('Tools'), 'ai TWO'), cluster_test.e('cluster_name_taken'), 'renaming to another cluster''s name in any case gets cluster_name_taken');
 reset role;
 select is(cluster_test.row_of(cluster_test.id('Tools')) ->> 'name', 'Tooling', 'the refused rename keeps the name');
 
@@ -909,7 +933,7 @@ select is(cluster_test.new_events(cluster_test.id('P1')), cluster_test.one_event
 select cluster_test.snap('cards before delete', to_jsonb(cluster_test.cards_md5()));
 select cluster_test.mark();
 set local role authenticated;
-select is(cluster_test.del('D', cluster_test.id('AI one')), to_jsonb('ok'::text), 'D deletes the cluster with two cards');
+select is(cluster_test.del('A', cluster_test.id('AI one')), to_jsonb('ok'::text), 'A deletes the cluster with two cards');
 reset role;
 select is(cluster_test.row_of(cluster_test.id('AI one')), null, 'the cluster is gone');
 select is((select count(*)::int from public.cluster_cards where cluster_id = '47000000-0000-4000-8000-000000000004'), 0, 'both cluster_cards rows are gone');
@@ -945,7 +969,7 @@ select is(cluster_test.del('B', gen_random_uuid()), cluster_test.e('cluster_not_
 select is(cluster_test.del('C', cluster_test.id('Docs')), cluster_test.e('cluster_not_found'), 'non-member C gets cluster_not_found deleting P''s cluster');
 select is(cluster_test.ren_err('C', cluster_test.id('Docs'), 'x'), cluster_test.ren_err('C', gen_random_uuid(), 'x'), 'the rename error is identical for an existing and a random id');
 select is(cluster_test.del('C', cluster_test.id('Docs')), cluster_test.del('C', gen_random_uuid()), 'the delete error is identical for an existing and a random id');
-select is(cluster_test.del('B', cluster_test.id('Ungrouped')), to_jsonb('ok'::text), 'B deletes Ungrouped');
+select is(cluster_test.del('A', cluster_test.id('Ungrouped')), to_jsonb('ok'::text), 'A deletes Ungrouped');
 select is(cluster_test.ren_err('B', cluster_test.id('Ungrouped'), 'Back'), cluster_test.e('cluster_not_found'), 'renaming a deleted cluster gets cluster_not_found');
 select is(cluster_test.del('B', cluster_test.id('Ungrouped')), cluster_test.e('cluster_not_found'), 'deleting it again gets cluster_not_found');
 reset role;

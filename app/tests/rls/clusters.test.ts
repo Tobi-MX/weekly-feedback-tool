@@ -285,10 +285,10 @@ describe('clusters', () => {
     return { ...roles, cycleId: cycle.id }
   }
 
-  it('member A creates, member B renames, and the owner deletes a cluster', async () => {
+  it('the owner, as facilitator, creates, renames, and deletes a cluster that members read', async () => {
     const { owner, memberA, memberB, cycleId } = await clustering()
 
-    const row = await created(memberA, cycleId, 'Process')
+    const row = await created(owner, cycleId, 'Process')
     expect(await boardClusters(memberB, cycleId)).toEqual([
       {
         cluster_id: row.cluster_id,
@@ -299,7 +299,7 @@ describe('clusters', () => {
     ])
 
     const [renamed] = expectRows(
-      await renameCluster(memberB, row.cluster_id, '  Process and tools '),
+      await renameCluster(owner, row.cluster_id, '  Process and tools '),
       1,
     )
     expect(renamed).toEqual({
@@ -307,7 +307,7 @@ describe('clusters', () => {
       name: 'Process and tools',
       source: 'manual',
     })
-    expect((await boardClusters(owner, cycleId))[0].name).toBe(
+    expect((await boardClusters(memberB, cycleId))[0].name).toBe(
       'Process and tools',
     )
 
@@ -317,8 +317,8 @@ describe('clusters', () => {
   })
 
   it('the non-member and anon are refused; a probe cannot tell a real cluster id from a random one', async () => {
-    const { memberA, nonMember, cycleId } = await clustering()
-    const row = await created(memberA, cycleId, 'Members only')
+    const { owner, memberA, nonMember, cycleId } = await clustering()
+    const row = await created(owner, cycleId, 'Members only')
 
     expectPgError(
       await createCluster(nonMember, cycleId, 'Outsider'),
@@ -349,7 +349,7 @@ describe('clusters', () => {
 
   it('no role can read or write clusters or cluster_cards directly', async () => {
     const roles = await clustering()
-    const row = await created(roles.memberA, roles.cycleId, 'Direct')
+    const row = await created(roles.owner, roles.cycleId, 'Direct')
     const callers: Caller[] = [
       roles.owner,
       roles.memberA,
@@ -411,7 +411,7 @@ describe('clusters', () => {
   })
 
   it('Realtime delivers one clusters_changed event to member B and nothing to the non-member', async () => {
-    const { memberA, memberB, nonMember, cycleId } = await clustering()
+    const { owner, memberB, nonMember, cycleId } = await clustering()
 
     const received = new Map<
       string,
@@ -493,7 +493,7 @@ describe('clusters', () => {
         resolveMemberEvent = resolve
       })
 
-      await created(memberA, cycleId, 'Live cluster')
+      await created(owner, cycleId, 'Live cluster')
 
       await withTimeout(
         memberEvent,

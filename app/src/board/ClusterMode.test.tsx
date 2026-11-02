@@ -1,4 +1,12 @@
-import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
+import {
+  act,
+  createEvent,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
+import { toast } from 'sonner'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CycleDetail } from '../cycles/cyclesApi'
 import type { CycleStatus } from '../cycles/cycleStatus'
@@ -11,6 +19,7 @@ import { membersMock } from '../test/membersMock'
 import { profileMock } from '../test/profileMock'
 import { renderApp } from '../test/renderApp'
 import type { BoardCard, BoardCluster, CycleBoard } from './boardApi'
+import { CARD_DRAG_TYPE } from './cardMove'
 import { ClustersApiError, type ClusterErrorCode } from './clusterErrors'
 import type { SavedCluster } from './clustersApi'
 
@@ -20,7 +29,9 @@ const PATH = `/cycles/${CYCLE_ID}/board`
 const NOT_FOUND = 'Cycle not found or you do not have access.'
 const PLACEHOLDER = 'Grouping cards into clusters is not available yet.'
 const INTRO =
-  'Group related cards into clusters. Everyone in the project can add, rename and delete clusters until voting starts.'
+  'Group related cards into clusters. Only you, as the facilitator, can change clusters until voting starts.'
+const READ_ONLY_INTRO =
+  'The facilitator is grouping the cards into clusters. Changes appear here as they are made, until voting starts.'
 const LIVE_NOTICE =
   'Live updates are unavailable. The board refreshes every few seconds.'
 
@@ -132,16 +143,35 @@ interface SetupOptions {
   readonly board?: CycleBoard
   readonly members?: ProjectMember[]
   readonly userId?: string
+  readonly pointer?: 'fine' | 'coarse'
+}
+
+function mockPointer(pointer: 'fine' | 'coarse') {
+  vi.spyOn(window, 'matchMedia').mockImplementation(
+    (query: string): MediaQueryList => ({
+      matches: query === '(pointer: fine)' && pointer === 'fine',
+      media: query,
+      onchange: null,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      dispatchEvent: () => false,
+    }),
+  )
 }
 
 function setup(options: SetupOptions = {}) {
+  mockPointer(options.pointer ?? 'coarse')
   mockRestoredSession('dev@example.com', options.userId ?? 'user-1')
   profileMock.fetchProfileDisplayName.mockResolvedValue('Dev User')
   cyclesMock.fetchCycle.mockResolvedValue(cycle)
   boardMock.fetchCycleBoard.mockResolvedValue(
     options.board ?? boardOf('cluster'),
   )
-  membersMock.fetchProjectMembers.mockResolvedValue(options.members ?? asMember)
+  const members = options.members ?? asFacilitator
+  editableSetup = isFacilitatorOf(members)
+  membersMock.fetchProjectMembers.mockResolvedValue(members)
   return renderApp({ initialEntries: [PATH] })
 }
 
@@ -151,8 +181,23 @@ function saved(
   return { clusterId: cluster.clusterId, name: cluster.name, source: 'manual' }
 }
 
+/** Whether the last setup's caller is the facilitator (#19b). */
+let editableSetup = true
+
+function isFacilitatorOf(members: readonly ProjectMember[]): boolean {
+  return members.some((member) => member.isMe && member.role === 'facilitator')
+}
+
+/**
+ * The cluster board, once the members query has given the facilitator the
+ * controls (#19b: the board shows read-only until then).
+ */
 async function clusterBoard(): Promise<HTMLElement> {
-  return screen.findByTestId('cluster-board')
+  const board = await screen.findByTestId('cluster-board')
+  if (editableSetup) {
+    await screen.findByRole('form', { name: 'New cluster' })
+  }
+  return board
 }
 
 function newForm(): HTMLElement {
@@ -285,23 +330,6 @@ describe('cluster mode layout', () => {
       ).toHaveTextContent('Delete')
     }
     expect(screen.queryByText('No clusters yet. Add one above.')).toBeNull()
-  })
-
-  it('the facilitator, the owner, and an ordinary member see exactly the same cluster controls', async () => {
-    const html: string[] = []
-    for (const members of [asFacilitator, asOwnerOnly, asMember]) {
-      const view = setup({ members })
-      await clusterBoard()
-      await waitFor(() => {
-        expect(membersMock.fetchProjectMembers).toHaveBeenCalled()
-      })
-      html.push(normalizeIds(screen.getByTestId('cluster-board').outerHTML))
-      view.unmount()
-      queryClient.clear()
-      membersMock.fetchProjectMembers.mockClear()
-    }
-    expect(html[1]).toBe(html[0])
-    expect(html[2]).toBe(html[0])
   })
 
   it('an anonymous card in a cluster renders as in Ungrouped, identically for two users', async () => {
@@ -1155,4 +1183,728 @@ describe('"Start voting" confirmation', () => {
       ).toBeEnabled()
     },
   )
+})
+
+// ---------------------------------------------------------------------------
+// #19b: only the facilitator edits clusters.
+// ---------------------------------------------------------------------------
+
+const FACILITATOR_ONLY = 'Only the facilitator can change clusters.'
+
+/** Lets the members query resolve and the board render its answer. */
+async function membersSettled(): Promise<void> {
+  await waitFor(() => {
+    expect(membersMock.fetchProjectMembers).toHaveBeenCalled()
+  })
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  })
+}
+
+/** Re-reads the members the way the board does on window focus. */
+function refocusWindow() {
+  act(() => {
+    window.dispatchEvent(new Event('focus'))
+  })
+}
+
+function modeHeading(): HTMLElement {
+  return screen.getByRole('heading', { level: 2, name: 'Cluster' })
+}
+
+/** A minimal DataTransfer: jsdom has none. */
+function cardTransfer(cardId: string) {
+  const data = new Map([[CARD_DRAG_TYPE, cardId]])
+  return {
+    get types() {
+      return [...data.keys()]
+    },
+    files: [],
+    dropEffect: 'none',
+    effectAllowed: 'all',
+    setData: vi.fn(),
+    getData: (type: string) => data.get(type) ?? '',
+  }
+}
+
+function fireDrag(
+  kind: 'dragOver' | 'drop',
+  element: Element,
+  transfer: ReturnType<typeof cardTransfer>,
+) {
+  fireEvent(element, createEvent[kind](element, { dataTransfer: transfer }))
+}
+
+/** Every control a read-only viewer must not get, by role and name. */
+function expectNoClusterControls() {
+  const board = screen.getByTestId('cluster-board')
+  expect(screen.queryByRole('form', { name: 'New cluster' })).toBeNull()
+  expect(within(board).queryAllByRole('textbox')).toEqual([])
+  expect(within(board).queryAllByRole('button')).toEqual([])
+  expect(
+    screen.queryByRole('button', {
+      name: /^(Rename|Delete|Merge|Split) cluster |^Move card: /,
+    }),
+  ).toBeNull()
+  expect(screen.queryByRole('checkbox')).toBeNull()
+  expect(screen.queryByRole('menu')).toBeNull()
+  expect(document.querySelector('[draggable]')).toBeNull()
+  // Not only by role: an open Move menu would hide the rest from role queries.
+  expect(
+    board.querySelectorAll('button, input, select, textarea'),
+  ).toHaveLength(0)
+  expect(
+    document.querySelector('[data-move-menu], [data-move-card]'),
+  ).toBeNull()
+  expect(board.querySelector('[data-drop-target]')).toBeNull()
+  expect(board.innerHTML).not.toMatch(/cursor-grab|data-drop-line/)
+}
+
+function boardTexts() {
+  const board = screen.getByTestId('cluster-board')
+  return {
+    headings: within(board)
+      .getAllByRole('heading', { level: 3 })
+      .map((heading) => heading.textContent),
+    lists: within(board)
+      .getAllByRole('list')
+      .map((list) => [list.getAttribute('aria-label'), ...texts(list)]),
+  }
+}
+
+describe('facilitator-only cluster editing (#19b)', () => {
+  it('the facilitator gets every control of #17 to #19 and the facilitator intro', async () => {
+    setup({ pointer: 'fine' })
+    await clusterBoard()
+
+    expect(screen.getByText(INTRO)).toBeInTheDocument()
+    expect(screen.queryByText(READ_ONLY_INTRO)).toBeNull()
+    expect(newInput()).toBeInTheDocument()
+    for (const name of ['Process', 'Tools']) {
+      expect(
+        screen.getByRole('button', { name: `Rename cluster ${name}` }),
+      ).toBeInTheDocument()
+      expect(
+        screen.getByRole('button', { name: `Delete cluster ${name}` }),
+      ).toBeInTheDocument()
+      expect(
+        screen.getByRole('button', { name: `Merge cluster ${name}` }),
+      ).toBeInTheDocument()
+    }
+    expect(
+      screen.getByRole('button', { name: 'Split cluster Process' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getAllByRole('button', { name: /^Move card: / }),
+    ).toHaveLength(CARDS.length)
+    expect(document.querySelectorAll('li[draggable="true"]')).toHaveLength(
+      CARDS.length,
+    )
+    expect(
+      screen.getByRole('button', { name: 'Start voting' }),
+    ).toBeInTheDocument()
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Split cluster Process' }),
+    )
+    expect(screen.getAllByRole('checkbox')).toHaveLength(2)
+  })
+
+  it.each<[string, ProjectMember[]]>([
+    ['an ordinary member', asMember],
+    ['the owner who is not the facilitator', asOwnerOnly],
+  ])(
+    '%s sees the same board read-only: no control, no drag, no drop',
+    async (_label, members) => {
+      const facilitatorView = setup({ pointer: 'fine' })
+      await clusterBoard()
+      const expected = boardTexts()
+      facilitatorView.unmount()
+      queryClient.clear()
+      membersMock.fetchProjectMembers.mockClear()
+
+      setup({ members, pointer: 'fine' })
+      const board = await clusterBoard()
+      await membersSettled()
+
+      expect(screen.getByText(READ_ONLY_INTRO)).toBeInTheDocument()
+      expect(screen.queryByText(INTRO)).toBeNull()
+      expect(boardTexts()).toEqual(expected)
+      expectNoClusterControls()
+      expect(screen.queryByRole('button', { name: 'Start voting' })).toBeNull()
+      expect(screen.queryByText('No clusters yet. Add one above.')).toBeNull()
+
+      const transfer = cardTransfer(CARDS[0].cardId)
+      const process = section('Process (2)')
+      fireDrag('dragOver', process, transfer)
+      expect(process).not.toHaveClass('ring-2')
+      fireDrag('drop', process, transfer)
+      fireDrag('drop', section('Ungrouped (3)'), transfer)
+      expect(boardMock.moveCard).not.toHaveBeenCalled()
+      expect(board.textContent).not.toMatch(/facilitator|read-only/i)
+    },
+  )
+
+  it('a member and the non-facilitator owner get byte-identical boards', async () => {
+    const html: string[] = []
+    for (const [userId, members] of [
+      ['user-1', asMember],
+      ['user-2', asOwnerOnly],
+    ] as const) {
+      const view = setup({ userId, members: [...members], pointer: 'fine' })
+      await clusterBoard()
+      await membersSettled()
+      html.push(normalizeIds(screen.getByTestId('cluster-board').outerHTML))
+      view.unmount()
+      queryClient.clear()
+      membersMock.fetchProjectMembers.mockClear()
+    }
+    expect(html[1]).toBe(html[0])
+  })
+
+  it('a board with no clusters tells a member only that there are none', async () => {
+    setup({ board: boardOf('cluster', []), members: asMember })
+    await clusterBoard()
+    await membersSettled()
+    expect(screen.getByText('No clusters yet.')).toBeInTheDocument()
+    expect(screen.queryByText('No clusters yet. Add one above.')).toBeNull()
+  })
+
+  it('while the members query loads, and after it fails, the board is read-only', async () => {
+    const pending = deferred<ProjectMember[]>()
+    setup({ pointer: 'fine' })
+    membersMock.fetchProjectMembers.mockReturnValue(pending.promise)
+    await screen.findByTestId('cluster-board')
+    await waitFor(() => {
+      expect(membersMock.fetchProjectMembers).toHaveBeenCalled()
+    })
+    expect(screen.getByText(READ_ONLY_INTRO)).toBeInTheDocument()
+    expectNoClusterControls()
+
+    await act(async () => {
+      pending.reject(new Error('offline'))
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    expect(screen.getByText(READ_ONLY_INTRO)).toBeInTheDocument()
+    expectNoClusterControls()
+  })
+
+  describe('when a re-read moves the role away', () => {
+    type Opener = () => Promise<void>
+    const openers: [string, Opener][] = [
+      [
+        'an open rename form',
+        async () => {
+          fireEvent.click(
+            screen.getByRole('button', { name: 'Rename cluster Process' }),
+          )
+          const input = within(
+            screen.getByRole('form', { name: 'Rename cluster Process' }),
+          ).getByRole('textbox')
+          typeInto(input, 'Draft name')
+          await waitFor(() => {
+            expect(input).toHaveFocus()
+          })
+        },
+      ],
+      [
+        'a delete confirmation',
+        async () => {
+          fireEvent.click(
+            screen.getByRole('button', { name: 'Delete cluster Process' }),
+          )
+          await waitFor(() => {
+            expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus()
+          })
+        },
+      ],
+      [
+        'a merge form',
+        async () => {
+          fireEvent.click(
+            screen.getByRole('button', { name: 'Merge cluster Process' }),
+          )
+          await waitFor(() => {
+            expect(
+              screen.getByRole('combobox', { name: 'Merge into' }),
+            ).toHaveFocus()
+          })
+        },
+      ],
+      [
+        'a split form with a selection',
+        async () => {
+          fireEvent.click(
+            screen.getByRole('button', { name: 'Split cluster Process' }),
+          )
+          const [first] = screen.getAllByRole('checkbox')
+          await waitFor(() => {
+            expect(first).toHaveFocus()
+          })
+          fireEvent.click(first)
+          expect(first).toBeChecked()
+        },
+      ],
+      [
+        'a New cluster draft',
+        async () => {
+          newInput().focus()
+          typeInto(newInput(), 'Half typed')
+          expect(newInput()).toHaveFocus()
+        },
+      ],
+      [
+        'an open Move menu',
+        async () => {
+          const move = screen.getByRole('button', {
+            name: 'Move card: Start pairing',
+          })
+          move.focus()
+          fireEvent.keyDown(move, { key: 'Enter' })
+          await screen.findByRole('menu')
+        },
+      ],
+    ]
+
+    it.each(openers)(
+      'closes %s and moves focus from the vanished control to the mode heading',
+      async (_label, open) => {
+        setup()
+        await clusterBoard()
+        await open()
+
+        membersMock.fetchProjectMembers.mockResolvedValue(asMember)
+        refocusWindow()
+
+        // Not a role query: an open Move menu hides the rest from them.
+        expect(await screen.findByText(READ_ONLY_INTRO)).toBeInTheDocument()
+        expectNoClusterControls()
+        expect(screen.queryByRole('group')).toBeNull()
+        expect(screen.queryByRole('form')).toBeNull()
+        await waitFor(() => {
+          expect(modeHeading()).toHaveFocus()
+        })
+        expect(screen.getByText(READ_ONLY_INTRO)).toBeInTheDocument()
+
+        // The drafts and selections are gone: getting the role back starts
+        // clean, and moves no focus.
+        membersMock.fetchProjectMembers.mockResolvedValue(asFacilitator)
+        refocusWindow()
+        await screen.findByRole('form', { name: 'New cluster' })
+        expect(newInput()).toHaveValue('')
+        expect(
+          screen.queryByRole('form', { name: /^(Rename|Split) cluster/ }),
+        ).toBeNull()
+        expect(screen.queryByRole('group')).toBeNull()
+        expect(screen.queryByRole('checkbox')).toBeNull()
+        expect(screen.queryByRole('menu')).toBeNull()
+        expect(modeHeading()).toHaveFocus()
+        expect(boardMock.renameCluster).not.toHaveBeenCalled()
+        expect(boardMock.createCluster).not.toHaveBeenCalled()
+      },
+    )
+
+    it('ends a drag in progress: no ring, no drop target, and a drop sends nothing', async () => {
+      setup({ pointer: 'fine' })
+      await clusterBoard()
+      const transfer = cardTransfer(CARDS[0].cardId)
+      const card = document.querySelector(
+        `li[data-card-id="${CARDS[0].cardId}"]`,
+      )
+      if (card === null) {
+        throw new Error('no card')
+      }
+      fireEvent(card, createEvent.dragStart(card, { dataTransfer: transfer }))
+      fireDrag('dragOver', section('Process (2)'), transfer)
+      expect(section('Process (2)')).toHaveClass('ring-2')
+
+      membersMock.fetchProjectMembers.mockResolvedValue(asMember)
+      refocusWindow()
+
+      expect(await screen.findByText(READ_ONLY_INTRO)).toBeInTheDocument()
+      expect(section('Process (2)')).not.toHaveClass('ring-2')
+      fireDrag('drop', section('Process (2)'), transfer)
+      expectNoClusterControls()
+      expect(boardMock.moveCard).not.toHaveBeenCalled()
+    })
+
+    it('also follows a re-read after a cycle event', async () => {
+      setup()
+      await clusterBoard()
+      await subscribed()
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Rename cluster Process' }),
+      )
+      const input = within(
+        screen.getByRole('form', { name: 'Rename cluster Process' }),
+      ).getByRole('textbox')
+      await waitFor(() => {
+        expect(input).toHaveFocus()
+      })
+
+      membersMock.fetchProjectMembers.mockResolvedValue(asOwnerOnly)
+      emitEvent()
+
+      expect(await screen.findByText(READ_ONLY_INTRO)).toBeInTheDocument()
+      expectNoClusterControls()
+      await waitFor(() => {
+        expect(modeHeading()).toHaveFocus()
+      })
+    })
+
+    it('leaves focus alone when it was outside the cluster controls', async () => {
+      setup()
+      await clusterBoard()
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Rename cluster Process' }),
+      )
+      const back = screen.getByRole('link', { name: 'Back to project' })
+      back.focus()
+
+      membersMock.fetchProjectMembers.mockResolvedValue(asMember)
+      refocusWindow()
+
+      expect(await screen.findByText(READ_ONLY_INTRO)).toBeInTheDocument()
+      expectNoClusterControls()
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      })
+      expect(back).toHaveFocus()
+    })
+  })
+
+  it('when the role moves to the viewer, the controls appear without a reload and focus stays', async () => {
+    setup({ members: asMember })
+    await clusterBoard()
+    await membersSettled()
+    await subscribed()
+    const back = screen.getByRole('link', { name: 'Back to project' })
+    back.focus()
+
+    membersMock.fetchProjectMembers.mockResolvedValue(asFacilitator)
+    emitEvent()
+
+    await screen.findByRole('form', { name: 'New cluster' })
+    expect(
+      screen.getByRole('button', { name: 'Rename cluster Process' }),
+    ).toBeInTheDocument()
+    expect(screen.getByText(INTRO)).toBeInTheDocument()
+    expect(back).toHaveFocus()
+  })
+
+  describe('a write refused with not_project_facilitator', () => {
+    type Refusal = () => Promise<void>
+    const refusals: [string, Refusal][] = [
+      [
+        'create',
+        async () => {
+          const call = deferred<SavedCluster>()
+          boardMock.createCluster.mockReturnValue(call.promise)
+          typeInto(newInput(), 'Ideas')
+          fireEvent.click(addButton())
+          await waitFor(() => {
+            expect(boardMock.createCluster).toHaveBeenCalledTimes(1)
+          })
+          call.reject(new ClustersApiError('not_project_facilitator'))
+        },
+      ],
+      [
+        'rename',
+        async () => {
+          const call = deferred<SavedCluster>()
+          boardMock.renameCluster.mockReturnValue(call.promise)
+          fireEvent.click(
+            screen.getByRole('button', { name: 'Rename cluster Process' }),
+          )
+          const form = screen.getByRole('form', {
+            name: 'Rename cluster Process',
+          })
+          typeInto(within(form).getByRole('textbox'), 'Renamed')
+          fireEvent.submit(form)
+          await waitFor(() => {
+            expect(boardMock.renameCluster).toHaveBeenCalledTimes(1)
+          })
+          call.reject(new ClustersApiError('not_project_facilitator'))
+        },
+      ],
+      [
+        'delete',
+        async () => {
+          const call = deferred<undefined>()
+          boardMock.deleteCluster.mockReturnValue(call.promise)
+          fireEvent.click(
+            screen.getByRole('button', { name: 'Delete cluster Process' }),
+          )
+          fireEvent.click(
+            screen.getByRole('button', { name: 'Delete cluster' }),
+          )
+          await waitFor(() => {
+            expect(boardMock.deleteCluster).toHaveBeenCalledTimes(1)
+          })
+          call.reject(new ClustersApiError('not_project_facilitator'))
+        },
+      ],
+      [
+        'merge',
+        async () => {
+          const call = deferred<SavedCluster>()
+          boardMock.mergeClusters.mockReturnValue(call.promise)
+          fireEvent.click(
+            screen.getByRole('button', { name: 'Merge cluster Process' }),
+          )
+          fireEvent.click(
+            screen.getByRole('button', { name: 'Merge clusters' }),
+          )
+          await waitFor(() => {
+            expect(boardMock.mergeClusters).toHaveBeenCalledTimes(1)
+          })
+          call.reject(new ClustersApiError('not_project_facilitator'))
+        },
+      ],
+      [
+        'split',
+        async () => {
+          const call = deferred<SavedCluster>()
+          boardMock.splitCluster.mockReturnValue(call.promise)
+          fireEvent.click(
+            screen.getByRole('button', { name: 'Split cluster Process' }),
+          )
+          fireEvent.click(screen.getAllByRole('checkbox')[0])
+          const form = screen.getByRole('form', {
+            name: 'Split cluster Process',
+          })
+          typeInto(
+            within(form).getByRole('textbox', { name: 'New cluster name' }),
+            'Split off',
+          )
+          fireEvent.submit(form)
+          await waitFor(() => {
+            expect(boardMock.splitCluster).toHaveBeenCalledTimes(1)
+          })
+          call.reject(new ClustersApiError('not_project_facilitator'))
+        },
+      ],
+      [
+        'move',
+        async () => {
+          const call = deferred<undefined>()
+          boardMock.moveCard.mockReturnValue(call.promise)
+          const move = screen.getByRole('button', {
+            name: 'Move card: Start pairing',
+          })
+          move.focus()
+          fireEvent.keyDown(move, { key: 'Enter' })
+          const menu = await screen.findByRole('menu')
+          fireEvent.click(
+            within(menu).getByRole('menuitem', { name: 'Move to Tools' }),
+          )
+          // The pending move is drawn over the board at once.
+          await waitFor(() => {
+            expect(
+              screen.getByRole('heading', { level: 3, name: 'Tools (1)' }),
+            ).toBeInTheDocument()
+          })
+          call.reject(new ClustersApiError('not_project_facilitator'))
+        },
+      ],
+    ]
+
+    it.each(refusals)(
+      '%s: toasts, hides every control and Start voting at once, re-reads the members once, and follows the answer',
+      async (_op, refuse) => {
+        setup()
+        await clusterBoard()
+        const errorToast = vi.spyOn(toast, 'error')
+        const reread = deferred<ProjectMember[]>()
+        membersMock.fetchProjectMembers.mockClear()
+        membersMock.fetchProjectMembers.mockReturnValue(reread.promise)
+
+        await refuse()
+
+        await waitFor(() => {
+          expect(errorToast).toHaveBeenCalledWith(FACILITATOR_ONLY)
+        })
+        expect(errorToast).toHaveBeenCalledTimes(1)
+        // Hidden at once, before the re-read answers.
+        // Not a role query: an open Move menu hides the rest from them.
+        expect(await screen.findByText(READ_ONLY_INTRO)).toBeInTheDocument()
+        expectNoClusterControls()
+        expect(
+          screen.queryByRole('button', { name: 'Start voting' }),
+        ).toBeNull()
+        expect(screen.getByText(READ_ONLY_INTRO)).toBeInTheDocument()
+        // A refused move's card is back in its server place.
+        expect(
+          screen.getByRole('heading', { level: 3, name: 'Tools (0)' }),
+        ).toBeInTheDocument()
+        expect(
+          screen.getByRole('heading', { level: 3, name: 'Ungrouped (3)' }),
+        ).toBeInTheDocument()
+        await waitFor(() => {
+          expect(membersMock.fetchProjectMembers).toHaveBeenCalledTimes(1)
+        })
+
+        // Still the facilitator after all (a stale refusal): the controls
+        // come back only once the re-read says so.
+        await act(async () => {
+          reread.resolve(asFacilitator)
+          await reread.promise
+        })
+        await screen.findByRole('form', { name: 'New cluster' })
+        expect(
+          screen.getByRole('button', { name: 'Start voting' }),
+        ).toBeInTheDocument()
+        expect(membersMock.fetchProjectMembers).toHaveBeenCalledTimes(1)
+      },
+    )
+
+    // A real browser blurs a button to <body> when it turns disabled while
+    // its request is pending; jsdom does not, so the blur is done by hand.
+    type Start = () => { reject: (error: unknown) => void }
+    const keyboardStarts: [string, Start][] = [
+      [
+        'Delete cluster',
+        () => {
+          const call = deferred<undefined>()
+          boardMock.deleteCluster.mockReturnValue(call.promise)
+          fireEvent.click(
+            screen.getByRole('button', { name: 'Delete cluster Process' }),
+          )
+          const confirm = screen.getByRole('button', { name: 'Delete cluster' })
+          confirm.focus()
+          fireEvent.click(confirm)
+          return call
+        },
+      ],
+      [
+        'Merge clusters',
+        () => {
+          const call = deferred<SavedCluster>()
+          boardMock.mergeClusters.mockReturnValue(call.promise)
+          fireEvent.click(
+            screen.getByRole('button', { name: 'Merge cluster Process' }),
+          )
+          const confirm = screen.getByRole('button', { name: 'Merge clusters' })
+          confirm.focus()
+          fireEvent.click(confirm)
+          return call
+        },
+      ],
+      [
+        'Add cluster',
+        () => {
+          const call = deferred<SavedCluster>()
+          boardMock.createCluster.mockReturnValue(call.promise)
+          typeInto(newInput(), 'Ideas')
+          addButton().focus()
+          fireEvent.click(addButton())
+          return call
+        },
+      ],
+    ]
+
+    it.each(keyboardStarts)(
+      '%s refused after its button blurred to <body>: focus goes to the mode heading',
+      async (_label, start) => {
+        setup()
+        await clusterBoard()
+        // The re-read the refusal starts confirms the role is gone.
+        membersMock.fetchProjectMembers.mockResolvedValue(asMember)
+        const call = start()
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        })
+        act(() => {
+          // jsdom ignores blur() on a disabled button; lift it for the blur.
+          const active = document.activeElement
+          if (active instanceof HTMLButtonElement && active.disabled) {
+            active.disabled = false
+            active.blur()
+            active.disabled = true
+          } else if (active instanceof HTMLElement) {
+            active.blur()
+          }
+        })
+        expect(document.activeElement).toBe(document.body)
+
+        await act(async () => {
+          call.reject(new ClustersApiError('not_project_facilitator'))
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        })
+
+        expect(await screen.findByText(FACILITATOR_ONLY)).toBeVisible()
+        expectNoClusterControls()
+        await waitFor(() => {
+          expect(modeHeading()).toHaveFocus()
+        })
+      },
+    )
+
+    it.each(keyboardStarts)(
+      '%s refused after the user focused another element: focus stays there (#94)',
+      async (_label, start) => {
+        setup()
+        await clusterBoard()
+        membersMock.fetchProjectMembers.mockResolvedValue(asMember)
+        const call = start()
+        const back = screen.getByRole('link', { name: 'Back to project' })
+        back.focus()
+
+        await act(async () => {
+          call.reject(new ClustersApiError('not_project_facilitator'))
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        })
+
+        expect(await screen.findByText(FACILITATOR_ONLY)).toBeVisible()
+        expectNoClusterControls()
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 20))
+        })
+        expect(back).toHaveFocus()
+      },
+    )
+
+    it('keeps the controls hidden when the re-read says the viewer is a member', async () => {
+      setup()
+      await clusterBoard()
+      const reread = deferred<ProjectMember[]>()
+      membersMock.fetchProjectMembers.mockClear()
+      membersMock.fetchProjectMembers.mockReturnValue(reread.promise)
+      boardMock.renameCluster.mockRejectedValue(
+        new ClustersApiError('not_project_facilitator'),
+      )
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Rename cluster Process' }),
+      )
+      const form = screen.getByRole('form', { name: 'Rename cluster Process' })
+      const input = within(form).getByRole('textbox')
+      typeInto(input, 'Renamed')
+      input.focus()
+      fireEvent.submit(form)
+
+      expect(await screen.findByText(FACILITATOR_ONLY)).toBeVisible()
+      await waitFor(() => {
+        expect(modeHeading()).toHaveFocus()
+      })
+      await act(async () => {
+        reread.resolve(asMember)
+        await reread.promise
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      })
+      expectNoClusterControls()
+      expect(screen.getByText(READ_ONLY_INTRO)).toBeInTheDocument()
+    })
+
+    it('not_project_member from a write still shows the not-found state', async () => {
+      setup()
+      await clusterBoard()
+      boardMock.deleteCluster.mockRejectedValue(
+        new ClustersApiError('not_project_member'),
+      )
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Delete cluster Tools' }),
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'Delete cluster' }))
+      expect(await screen.findByText(NOT_FOUND)).toBeInTheDocument()
+    })
+  })
 })
