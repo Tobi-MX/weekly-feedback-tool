@@ -140,6 +140,14 @@ Audio/video transcription is delegated to a managed speech-to-text API. Running 
 - Clusters (#17) live in `clusters` and `cluster_cards`, which are default-deny like `cards` (RLS with no policies, no client privilege). The six RPCs `create_cluster`, `rename_cluster`, `delete_cluster`, `move_card`, `merge_clusters`, and `split_cluster` are the only write path, and only the project's current facilitator may call them successfully (#19b): everyone else, the owner included when not the facilitator, gets `not_project_facilitator`. Neither table has a creator, editor, or actor column. `get_cycle_board` returns them as one `clusters` key, `[]` before reveal and the same for every caller after; anonymous cards gain no key.
 - `cycle_events` also carries `clusters_changed` (#17): one row per changed cycle for every statement that changes `clusters` or `cluster_cards`, written by statement-level triggers. A CHECK requires `actor_id` null, `payload = '{}'`, and `from_status = to_status`, so who edited a cluster is never broadcast and an edit can never be tied to a card author.
 
+**AI clustering (#20)**
+
+- Card text, anonymous card text included, is sent to Anthropic when the facilitator asks for suggestions (§7.1). That is the only data sent: each available card's text and category under a short per-request reference (`c1`, `c2`, …), in category, then card-id order, the names of the team's manual clusters, and the number of cluster slots left.
+- Never sent: card UUIDs, `is_anonymous`, author ids, display names, `is_mine`, timestamps, creation order, and project, cycle, member, or user data. Anonymous and attributed cards are sent the same way, so nothing tells them apart. Text can still contain whatever the author typed.
+- `cluster-feedback` reads cards only through `begin_ai_clustering`, which never reads `card_authors` or `profiles`. The reference-to-card map stays in the function's memory for the request and is never logged or stored.
+- `ai_runs` holds no card text, prompt, model output, cluster name, card id, author, or user id, and no client role can read it. The function's log line holds codes, ids of the run and cycle, timings, token counts, and the model only.
+- Model output is untrusted: it is validated in the function and again inside `replace_ai_clusters`, and the worst result of a prompt injection is a bad grouping or name in an editable draft.
+
 **Pre-reveal visibility**
 
 - The reveal happens only through `start_retrospective`, which only the project's current facilitator may call (owning the project gives no right). It moves the open cycle from `collecting` to `reveal` and sets `feedback_cycles.revealed_at` in one update; no card row is copied, changed, or deleted, and no privilege on `cards` or `card_authors` changes.
@@ -166,7 +174,7 @@ Audio/video transcription is delegated to a managed speech-to-text API. Running 
 
 - `security definer` functions validate `auth.uid()` and membership.
 - Explicit schema qualification and a fixed `search_path`.
-- Execute permission revoked from `public`/`anon`; granted only to `authenticated`.
+- Execute permission revoked from `public`/`anon`; granted only to `authenticated`. The three AI clustering RPCs (#20) are the exception: they are granted only to `service_role`, take the user id the Edge Function verified from the JWT, and check membership and role for that id.
 - No dynamic SQL in RPCs.
 - Default-deny RLS on every table; no client access unless explicitly granted.
 
@@ -227,7 +235,7 @@ Names are indicative; exact columns will be finalized with migrations.
 | `meeting_uploads` | Kind (`audio` / `video` / `transcript_file` / `transcript_text`), storage path or pasted text, processing status, provider job ID |
 | `transcripts` | Full text plus timestamped segments |
 | `extracted_items` | Draft decisions/actions: description, owner guess, due date guess, evidence quote, timestamp, confidence, status |
-| `ai_runs` | Model, prompt version, request ID, token usage, timings — for debugging and cost tracking |
+| `ai_runs` | One row per AI run (#20): `id`, `cycle_id` (cascade), `function_name` (`cluster-feedback`; #32 and #35 extend the CHECK), `model` (requested), `response_model` (the model that answered, a fallback model after a refusal), `prompt_version`, `status` (`running`, `succeeded`, `failed`, `skipped`), `error_code`, `provider_called`, `provider_request_id`, `provider_status`, `input_tokens`, `output_tokens`, `duration_ms`, `card_count`, `cluster_count`, `started_at`, `finished_at`. At most one `running` row per cycle and function (partial unique index). Server-only: RLS with no policy, only `service_role` may select, insert, and update, not in Realtime. No card text, prompt, output, name, card id, author, or user id. The run's cluster-state fingerprint is kept beside it in `private.ai_run_fingerprints` while it runs |
 
 ### Outcomes
 
@@ -275,11 +283,21 @@ All RPCs validate the caller's membership and the current cycle stage.
 | `publish_summary` | Freeze and publish the retrospective summary |
 | `assign_facilitator` | Transfer the facilitator role |
 
+### Service-role RPCs (#20)
+
+Callable by `service_role` only, from the `cluster-feedback` Edge Function after it verified the caller's JWT. Each takes the verified user id and reads `project_members` for it; errors are stable codes with no detail.
+
+| RPC | Purpose |
+|---|---|
+| `begin_ai_clustering(p_cycle_id, p_user_id, p_model, p_prompt_version)` | Locks `projects` `FOR SHARE`, checks the facilitator, locks the cycle `FOR UPDATE`, `cluster` stage only. Marks a `running` run older than 5 minutes `failed` / `run_abandoned`, then refuses another running run, 20 runs that reached the model, 50 manual clusters, and more than 300 available cards. Inserts the `running` row, stores the cluster fingerprint, and returns exactly `run_id`, `cards` (each `card_id`, `category`, `text`), `manual_cluster_names`, `cluster_slots`. Errors: `not_project_member`, `not_project_facilitator`, `cycle_not_clustering`, `ai_run_in_progress`, `ai_run_limit_reached`, `cluster_limit_reached`, `too_many_cards`, `invalid_ai_payload` |
+| `replace_ai_clusters(p_run_id, p_user_id, p_clusters, p_metrics)` | Same locks and checks again, then the stale check: the fingerprint must be unchanged. Re-validates the payload (`{name, category, card_ids}` per cluster), deletes the cycle's `ai` clusters, inserts the new ones with name suffixes, and marks the run `succeeded` (or `skipped`) with its metrics, all in one transaction. Errors: the begin codes above that apply, `clusters_changed_during_run`, `run_not_active`, `invalid_ai_payload` |
+| `finish_ai_run(p_run_id, p_status, p_error_code, p_metrics)` | Ends a `running` run without writing clusters (a failure with its error code); locks only the run row. Errors: `run_not_active`, `invalid_ai_payload` |
+
 ### Edge Functions
 
 | Function | Purpose |
 |---|---|
-| `cluster-feedback` | Load revealed cards, ask Claude for draft clusters, persist them |
+| `cluster-feedback` | Facilitator only, `cluster` stage only (#20). `POST { cycle_id }` with the user's JWT. Begins a run, sends the available cards to `claude-opus-5-5` with structured outputs, validates the answer, and replaces the cycle's AI clusters through `replace_ai_clusters`, or records the failure with `finish_ai_run`. Returns counts only; the client refetches `get_cycle_board`. Error codes: `_docs/local-development.md` |
 | `start-transcription` | Validate facilitator, submit media to the transcription provider |
 | `transcription-webhook` | Verify provider signature, save transcript, trigger extraction |
 | `extract-outcomes` | Ask Claude for draft decisions/actions with evidence |
@@ -308,6 +326,16 @@ Prompt requirements:
 - never finalize — the output is always editable.
 
 Re-running clustering must not destroy manual edits. AI-generated clusters are replaced; manually created/edited clusters are preserved.
+
+As built in #20:
+
+- **Who and when.** Only the project's current facilitator, only while the cycle is in `cluster`. Both are checked when the run begins and again when it writes.
+- **Available cards.** The cards that are ungrouped or in an `ai` cluster when the run begins. Cards in a `manual` cluster are never sent and never placed. A rerun treats every card that is ungrouped at that moment as available, including one someone deliberately moved to Ungrouped, because #18 leaves no marker; keeping those out of reruns is #97, and #21's regenerate confirmation must say so.
+- **The call.** `claude-opus-5-5`, adaptive thinking, `effort: "medium"`, `max_tokens: 16000`, non-streaming, `output_config.format` with the output JSON schema, and the server-side refusal fallback (`fallbacks: "default"`, beta `server-side-fallback-2026-07-01`) on `client.beta.messages`. The SDK client has a 60 s timeout and one retry. The prompt (`cluster-feedback/v1`) lives in `supabase/functions/cluster-feedback/prompt.ts`; the cards go in the user message as one JSON array, and the system prompt tells the model that card text is data, never instructions.
+- **Validation.** `stop_reason` must be `end_turn` (`refusal` is `ai_refused`); the answer must parse and match the schema; every ref must be one that was sent and appear once; every cluster needs a card and one category; names must pass #17's rules; and there may be no more clusters than slots. Anything else is `ai_invalid_output` and writes nothing.
+- **Stale check.** No lock is held during the call. The run stores a fingerprint of the cycle's clusters (`id`, `source`) and placements (`card_id`, `cluster_id`); if it differs when the run writes, the write fails with `clusters_changed_during_run`. Any create, delete, move, merge, split, keep, or AI rename during the call makes the run stale; renaming a manual cluster does not.
+- **The write.** In one transaction under the cycle lock: delete the cycle's `ai` clusters, insert the new ones as `ai` in the model's order after the remaining clusters, and record the run. A name equal (ignoring case) to a manual cluster's or an earlier new name gets the lowest free suffix ` (2)`, ` (3)`, …, cutting the base so the result stays within 100 characters.
+- **Limits.** One running run per cycle (a run older than 5 minutes counts as abandoned), 20 runs per cycle that reached the model, at most 300 available cards, and no run with 50 manual clusters. Fewer than 2 available cards make no call: the run is recorded `skipped` and remaining AI clusters are removed.
 
 ### 7.2 Transcription
 

@@ -48,6 +48,36 @@ jobs:
       - name: Build
         run: npm run build
 
+  edge-functions:
+    name: Edge Functions (Deno)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2.0.5
+        with:
+          # The version recorded in _docs/local-development.md.
+          deno-version: v2.9.7
+
+      # The Edge Function env file holds secrets and must stay untracked.
+      - name: No committed Edge Function env file
+        run: test -z "$(git ls-files 'supabase/functions/.env' 'supabase/functions/**/.env')"
+
+      - name: Type check
+        working-directory: supabase/functions/cluster-feedback
+        run: deno check .
+
+      - name: Lint
+        working-directory: supabase/functions
+        run: deno lint
+
+      # No --allow-* flag: the tests get no network, env, or file access.
+      - name: Test
+        working-directory: supabase/functions/cluster-feedback
+        run: deno test
+
   database:
     name: Database (local Supabase)
     runs-on: ubuntu-latest

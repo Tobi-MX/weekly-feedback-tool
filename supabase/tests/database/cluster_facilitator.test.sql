@@ -442,12 +442,13 @@ select is((select (select count(*)::int from regexp_matches(p.prosrc, 'is_projec
 
 select is((select md5(prosrc) from pg_proc where oid = 'public.get_cycle_board(uuid)'::regprocedure), '63317c82ae89c6b9c7851c07bafefbc7', 'get_cycle_board is unchanged');
 select is(
-  (select string_agg(table_name, ',' order by table_name) from information_schema.tables where table_schema = 'public'),
+  -- ai_runs is added by #20's later migration, not by this one.
+  (select string_agg(table_name, ',' order by table_name) from information_schema.tables where table_schema = 'public' and table_name <> 'ai_runs'),
   'card_authors,cards,cluster_cards,clusters,cycle_events,feedback_cycles,profiles,project_invites,project_members,projects',
   'no table or view is added to public'
 );
 select is(
-  (select md5(string_agg(table_name || '.' || column_name || ':' || data_type, ',' order by table_name, ordinal_position)) from information_schema.columns where table_schema = 'public'),
+  (select md5(string_agg(table_name || '.' || column_name || ':' || data_type, ',' order by table_name, ordinal_position)) from information_schema.columns where table_schema = 'public' and table_name <> 'ai_runs'),
   'e519634cb52f8c0b7a540df3f7a00978',
   'no column is added or changed in public'
 );
