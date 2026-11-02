@@ -190,15 +190,20 @@ interface DragState {
 const UNGROUPED_TARGET = 'ungrouped'
 
 /**
- * Whether focus is on one of the cluster controls: inside the cluster board
- * (only controls are focusable there) or in an open Move menu, which renders
- * in a portal.
+ * Whether focus belongs to the cluster controls: on one of them (inside the
+ * cluster board, where only controls are focusable, or in an open Move menu,
+ * which renders in a portal), or lost to <body> or nowhere. A browser blurs a
+ * button to <body> when it becomes disabled while its request is pending
+ * (Delete cluster, Merge clusters, Add cluster), so <body> counts as lost
+ * from the controls, as #94's rule treats it. Focus on any other element
+ * that still exists is the user's choice and is left alone.
  */
 function focusInClusterControls(): boolean {
   const active = document.activeElement
+  if (active === null || active === document.body || !active.isConnected) {
+    return true
+  }
   return (
-    active instanceof Element &&
-    active !== document.body &&
     active.closest('[data-testid="cluster-board"], [data-move-menu]') !== null
   )
 }

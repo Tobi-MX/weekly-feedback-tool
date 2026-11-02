@@ -1757,6 +1757,112 @@ describe('facilitator-only cluster editing (#19b)', () => {
       },
     )
 
+    // A real browser blurs a button to <body> when it turns disabled while
+    // its request is pending; jsdom does not, so the blur is done by hand.
+    type Start = () => { reject: (error: unknown) => void }
+    const keyboardStarts: [string, Start][] = [
+      [
+        'Delete cluster',
+        () => {
+          const call = deferred<undefined>()
+          boardMock.deleteCluster.mockReturnValue(call.promise)
+          fireEvent.click(
+            screen.getByRole('button', { name: 'Delete cluster Process' }),
+          )
+          const confirm = screen.getByRole('button', { name: 'Delete cluster' })
+          confirm.focus()
+          fireEvent.click(confirm)
+          return call
+        },
+      ],
+      [
+        'Merge clusters',
+        () => {
+          const call = deferred<SavedCluster>()
+          boardMock.mergeClusters.mockReturnValue(call.promise)
+          fireEvent.click(
+            screen.getByRole('button', { name: 'Merge cluster Process' }),
+          )
+          const confirm = screen.getByRole('button', { name: 'Merge clusters' })
+          confirm.focus()
+          fireEvent.click(confirm)
+          return call
+        },
+      ],
+      [
+        'Add cluster',
+        () => {
+          const call = deferred<SavedCluster>()
+          boardMock.createCluster.mockReturnValue(call.promise)
+          typeInto(newInput(), 'Ideas')
+          addButton().focus()
+          fireEvent.click(addButton())
+          return call
+        },
+      ],
+    ]
+
+    it.each(keyboardStarts)(
+      '%s refused after its button blurred to <body>: focus goes to the mode heading',
+      async (_label, start) => {
+        setup()
+        await clusterBoard()
+        // The re-read the refusal starts confirms the role is gone.
+        membersMock.fetchProjectMembers.mockResolvedValue(asMember)
+        const call = start()
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        })
+        act(() => {
+          // jsdom ignores blur() on a disabled button; lift it for the blur.
+          const active = document.activeElement
+          if (active instanceof HTMLButtonElement && active.disabled) {
+            active.disabled = false
+            active.blur()
+            active.disabled = true
+          } else if (active instanceof HTMLElement) {
+            active.blur()
+          }
+        })
+        expect(document.activeElement).toBe(document.body)
+
+        await act(async () => {
+          call.reject(new ClustersApiError('not_project_facilitator'))
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        })
+
+        expect(await screen.findByText(FACILITATOR_ONLY)).toBeVisible()
+        expectNoClusterControls()
+        await waitFor(() => {
+          expect(modeHeading()).toHaveFocus()
+        })
+      },
+    )
+
+    it.each(keyboardStarts)(
+      '%s refused after the user focused another element: focus stays there (#94)',
+      async (_label, start) => {
+        setup()
+        await clusterBoard()
+        membersMock.fetchProjectMembers.mockResolvedValue(asMember)
+        const call = start()
+        const back = screen.getByRole('link', { name: 'Back to project' })
+        back.focus()
+
+        await act(async () => {
+          call.reject(new ClustersApiError('not_project_facilitator'))
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        })
+
+        expect(await screen.findByText(FACILITATOR_ONLY)).toBeVisible()
+        expectNoClusterControls()
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 20))
+        })
+        expect(back).toHaveFocus()
+      },
+    )
+
     it('keeps the controls hidden when the re-read says the viewer is a member', async () => {
       setup()
       await clusterBoard()
