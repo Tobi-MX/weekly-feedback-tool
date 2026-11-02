@@ -294,7 +294,12 @@ describe('cluster mode layout', () => {
       within(board)
         .getAllByRole('heading', { level: 3 })
         .map((heading) => heading.textContent),
-    ).toEqual(['Ungrouped (3)', 'Process (2)', 'Tools (0)'])
+    ).toEqual([
+      'AI suggestions',
+      'Ungrouped (3)',
+      'Process (2)',
+      'Tools (0) AI suggestion',
+    ])
 
     const ungrouped = within(section('Ungrouped (3)')).getByRole('list', {
       name: 'Ungrouped cards',
@@ -318,7 +323,9 @@ describe('cluster mode layout', () => {
       'StopStop late mergesAda (you)',
     )
     expect(
-      within(section('Tools (0)')).getByText('No cards in this cluster yet.'),
+      within(section('Tools (0) AI suggestion')).getByText(
+        'No cards in this cluster yet.',
+      ),
     ).toBeInTheDocument()
 
     for (const name of ['Process', 'Tools']) {
@@ -1317,7 +1324,14 @@ describe('facilitator-only cluster editing (#19b)', () => {
     async (_label, members) => {
       const facilitatorView = setup({ pointer: 'fine' })
       await clusterBoard()
-      const expected = boardTexts()
+      // The same board without the facilitator's AI suggestions panel (#21).
+      const facilitatorTexts = boardTexts()
+      const expected = {
+        ...facilitatorTexts,
+        headings: facilitatorTexts.headings.filter(
+          (heading) => heading !== 'AI suggestions',
+        ),
+      }
       facilitatorView.unmount()
       queryClient.clear()
       membersMock.fetchProjectMembers.mockClear()
@@ -1700,7 +1714,10 @@ describe('facilitator-only cluster editing (#19b)', () => {
           // The pending move is drawn over the board at once.
           await waitFor(() => {
             expect(
-              screen.getByRole('heading', { level: 3, name: 'Tools (1)' }),
+              screen.getByRole('heading', {
+                level: 3,
+                name: 'Tools (1) AI suggestion',
+              }),
             ).toBeInTheDocument()
           })
           call.reject(new ClustersApiError('not_project_facilitator'))
@@ -1734,7 +1751,10 @@ describe('facilitator-only cluster editing (#19b)', () => {
         expect(screen.getByText(READ_ONLY_INTRO)).toBeInTheDocument()
         // A refused move's card is back in its server place.
         expect(
-          screen.getByRole('heading', { level: 3, name: 'Tools (0)' }),
+          screen.getByRole('heading', {
+            level: 3,
+            name: 'Tools (0) AI suggestion',
+          }),
         ).toBeInTheDocument()
         expect(
           screen.getByRole('heading', { level: 3, name: 'Ungrouped (3)' }),

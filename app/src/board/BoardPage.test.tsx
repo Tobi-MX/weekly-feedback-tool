@@ -293,9 +293,10 @@ describe('board modes', () => {
         expect(
           await screen.findByRole('button', { name: control }),
         ).toBeInTheDocument()
-        // Cluster mode (#17) adds its own "Add cluster" button for everyone.
+        // Cluster mode adds "Add cluster" (#17) and "Suggest clusters"
+        // (#21) for the facilitator.
         expect(within(main).getAllByRole('button')).toHaveLength(
-          status === 'cluster' ? 2 : 1,
+          status === 'cluster' ? 3 : 1,
         )
       }
       if (status === 'collecting') {

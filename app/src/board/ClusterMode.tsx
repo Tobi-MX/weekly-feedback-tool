@@ -12,6 +12,15 @@ import { toast } from 'sonner'
 import { focusRing, wrapText } from '@/cards/CardForms'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { keepErrorCodeOf, keepErrorMessage } from './aiClusteringErrors'
+import {
+  AI_GENERATING_ANNOUNCEMENT,
+  AI_REMOTE_ANNOUNCEMENT,
+  aiBlockedReason,
+  aiBoardCounts,
+  AiSuggestions,
+  keptAnnouncement,
+} from './AiSuggestions'
 import type { BoardCard, BoardCluster, CycleBoard } from './boardApi'
 import { ClusterCardItem } from './BoardCards'
 import { ungroupedCards } from './boardModel'
@@ -61,6 +70,11 @@ import {
   useRenameCluster,
   useSplitCluster,
 } from './useClusters'
+import {
+  focusInAiPanel,
+  useKeepAiClusters,
+  type AiClusteringRun,
+} from './useAiClustering'
 
 /** The Cluster stage's intro for the facilitator, who edits the clusters. */
 export const CLUSTER_INTRO =
@@ -86,8 +100,8 @@ const selectClass = cn(
   focusRing,
 )
 
-/** The form a cluster has open: at most one on the board at a time. */
-type OpenForm =
+/** The form a cluster has open. */
+type ClusterForm =
   | {
       readonly kind: 'rename'
       readonly clusterId: string
@@ -113,9 +127,28 @@ type OpenForm =
       readonly error: SplitError | null
     }
 
+/** A confirmation open in the AI suggestions panel (#21). */
+type PanelForm = { readonly kind: 'ai-run' } | { readonly kind: 'ai-keep' }
+
+/**
+ * The one form open on the board: a cluster's form or a panel confirmation.
+ * Opening one closes any other.
+ */
+type OpenForm = ClusterForm | PanelForm
+
+function clusterFormOf(form: OpenForm | null): ClusterForm | null {
+  return form === null || form.kind === 'ai-run' || form.kind === 'ai-keep'
+    ? null
+    : form
+}
+
 /** Where focus goes after the next render. */
 type FocusTarget =
   | { readonly kind: 'new-input' }
+  /** The panel's main button, else Keep, else the mode heading. */
+  | { readonly kind: 'ai-main' }
+  | { readonly kind: 'ai-keep' }
+  | { readonly kind: 'ai-cancel' }
   | {
       readonly kind:
         | 'rename-button'
@@ -130,7 +163,13 @@ type FocusTarget =
     }
 
 /** The button that opened each form, where Escape and Cancel return. */
-const OPENER: Record<OpenForm['kind'], FocusTarget['kind']> = {
+const OPENER: Record<
+  ClusterForm['kind'],
+  Exclude<
+    FocusTarget['kind'],
+    'new-input' | 'ai-main' | 'ai-keep' | 'ai-cancel'
+  >
+> = {
   rename: 'rename-button',
   delete: 'delete-button',
   merge: 'merge-button',
@@ -149,9 +188,18 @@ interface SuccessFocus {
 }
 
 function focusSelector(target: FocusTarget): string | null {
-  return target.kind === 'new-input'
-    ? null
-    : `[data-cluster-focus="${target.kind}:${target.clusterId}"]`
+  switch (target.kind) {
+    case 'new-input':
+      return null
+    case 'ai-main':
+      return '[data-ai-focus="main"], [data-ai-focus="keep"]'
+    case 'ai-keep':
+      return '[data-ai-focus="keep"]'
+    case 'ai-cancel':
+      return '[data-ai-focus="cancel"]'
+    default:
+      return `[data-cluster-focus="${target.kind}:${target.clusterId}"]`
+  }
 }
 
 function deleteQuestion(cluster: BoardCluster): string {
@@ -276,7 +324,7 @@ interface ClusterSectionProps {
   ) => ReactNode
   readonly dropTarget: DropTargetProps
   readonly dropActive: boolean
-  readonly form: OpenForm | null
+  readonly form: ClusterForm | null
   /** Every other cluster in board order: the merge targets. */
   readonly otherClusters: readonly BoardCluster[]
   readonly renamePending: boolean
@@ -393,8 +441,21 @@ function ClusterSection({
     )
   } else {
     header = (
-      <h3 id={headingId} className={cn('text-base font-semibold', wrapText)}>
-        {name} ({cards.length})
+      <h3
+        id={headingId}
+        className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 text-base font-semibold"
+      >
+        <span data-cluster-name="" className={wrapAnywhere}>
+          {name} ({cards.length})
+        </span>
+        {cluster.source === 'ai' ? (
+          <>
+            {' '}
+            <span className="rounded-md border px-1.5 py-0.5 text-xs font-medium whitespace-nowrap">
+              AI suggestion
+            </span>
+          </>
+        ) : null}
       </h3>
     )
   }
@@ -676,6 +737,11 @@ export interface ClusterModeProps {
   readonly onLostAccess: () => void
   /** Called when a write says the caller is not the facilitator. */
   readonly onNotFacilitator: () => void
+  /**
+   * The page's AI clustering request (#21). It lives above this view, so a
+   * request survives a stage change.
+   */
+  readonly ai: AiClusteringRun
 }
 
 /**
@@ -693,6 +759,7 @@ export function ClusterMode({
   isFacilitator,
   onLostAccess,
   onNotFacilitator,
+  ai,
 }: ClusterModeProps) {
   const { cycleId } = board
   const finePointer = useFinePointer()
@@ -720,6 +787,7 @@ export function ClusterMode({
   const deleteMutation = useDeleteCluster(cycleId)
   const mergeMutation = useMergeClusters(cycleId)
   const splitMutation = useSplitCluster(cycleId)
+  const keepMutation = useKeepAiClusters(cycleId)
   // One board write at a time: while a merge or split is pending, no card
   // moves; while a move is pending, merge and split send nothing.
   const clusterWritePending = mergeMutation.isPending || splitMutation.isPending
@@ -747,6 +815,9 @@ export function ClusterMode({
   const deletePendingRef = useRef(false)
   const mergePendingRef = useRef(false)
   const splitPendingRef = useRef(false)
+  const keepPendingRef = useRef(false)
+  // A focus request for the AI panel after a run's or a keep's result.
+  const [panelFocus, setPanelFocus] = useState<object | null>(null)
   // The form whose merge or split is in flight. Its refetched board may
   // already show the result (the source gone, the cluster down to one card)
   // before the request settles; the form's own success handles that, so the
@@ -792,12 +863,14 @@ export function ClusterMode({
     }
   }, [headingFocus])
 
+  const clusterForm = clusterFormOf(openForm)
   const formBusy =
-    openForm !== null &&
+    clusterForm !== null &&
     busyForm !== null &&
-    busyForm.kind === openForm.kind &&
-    busyForm.clusterId === openForm.clusterId
-  if (openForm !== null && !formBusy) {
+    busyForm.kind === clusterForm.kind &&
+    busyForm.clusterId === clusterForm.clusterId
+  if (clusterForm !== null && !formBusy) {
+    const openForm = clusterForm
     const own = clusters.find(
       (cluster) => cluster.clusterId === openForm.clusterId,
     )
@@ -834,6 +907,43 @@ export function ClusterMode({
           setOpenForm({ ...openForm, selected: pruned })
         }
       }
+    }
+  }
+
+  // The AI panel's counts come from the latest server board (#21).
+  const aiCounts = aiBoardCounts(board)
+  const aiTriggerShown = aiBlockedReason(aiCounts, ai.limitReached) === null
+  // A refetch can take away what a panel confirmation offers (a run no longer
+  // allowed, no suggestion left to keep): close it, and move focus back into
+  // the panel only if it was there (#94's rule).
+  if (
+    (openForm?.kind === 'ai-run' && (!aiTriggerShown || ai.pending)) ||
+    (openForm?.kind === 'ai-keep' &&
+      aiCounts.aiClusters === 0 &&
+      !keepMutation.isPending)
+  ) {
+    setOpenForm(null)
+    if (focusInAiPanel()) {
+      setFocusTarget({ kind: 'ai-main' })
+    }
+  }
+
+  // Announce AI suggestions that arrive from a run this tab did not start
+  // (#21): a refetch that brings an AI cluster id not seen before. The first
+  // load, an unchanged refetch, and a keep (ids disappear) announce nothing.
+  // While this tab's own run is pending its new ids are taken in silently;
+  // that run announces its own result.
+  const aiIds = board.clusters
+    .filter((cluster) => cluster.source === 'ai')
+    .map((cluster) => cluster.clusterId)
+  const [seenAiIds, setSeenAiIds] = useState<ReadonlySet<string>>(
+    () => new Set(aiIds),
+  )
+  const unseenAiIds = aiIds.filter((id) => !seenAiIds.has(id))
+  if (unseenAiIds.length > 0) {
+    setSeenAiIds(new Set([...seenAiIds, ...unseenAiIds]))
+    if (!ai.pending) {
+      setAnnouncement(AI_REMOTE_ANNOUNCEMENT)
     }
   }
 
@@ -915,8 +1025,49 @@ export function ClusterMode({
       selector === null
         ? newInputRef.current
         : rootRef.current?.querySelector<HTMLElement>(selector)
-    element?.focus()
+    if (element !== null && element !== undefined) {
+      element.focus()
+    } else if (focusTarget.kind === 'ai-main') {
+      document.getElementById(MODE_HEADING_ID)?.focus()
+    }
   }, [focusTarget])
+
+  // The page's AI request reports back here while this view is mounted: its
+  // announcements use this view's status region, and its focus rule needs
+  // to know whether the panel is shown.
+  const isFacilitatorRef = useRef(isFacilitator)
+  useEffect(() => {
+    isFacilitatorRef.current = isFacilitator
+  }, [isFacilitator])
+  const { attach } = ai
+  useEffect(
+    () =>
+      attach({
+        announce: (text) => {
+          setAnnouncementState((current) => ({ text, id: current.id + 1 }))
+        },
+        panelShown: () => isFacilitatorRef.current,
+        requestPanelFocus: () => {
+          setPanelFocus({})
+        },
+      }),
+    [attach],
+  )
+
+  // After a run's or a keep's result, when focus was still in the panel or
+  // lost to <body> (#94's rule): the panel's main button, else Keep, else the
+  // mode heading when the panel is gone.
+  useEffect(() => {
+    if (panelFocus === null) {
+      return
+    }
+    const root = rootRef.current
+    const target =
+      root?.querySelector<HTMLElement>('[data-ai-focus="main"]') ??
+      root?.querySelector<HTMLElement>('[data-ai-focus="keep"]') ??
+      document.getElementById(MODE_HEADING_ID)
+    target?.focus()
+  }, [panelFocus])
 
   const cardsById = new Map(board.cards.map((card) => [card.cardId, card]))
   const ungrouped = ungroupedCards(displayed)
@@ -931,6 +1082,7 @@ export function ClusterMode({
   /** One move at a time, through move_card only; a no-op sends nothing. */
   const startMove = (move: CardMove) => {
     if (
+      ai.isPending() ||
       movePendingRef.current ||
       mergePendingRef.current ||
       splitPendingRef.current ||
@@ -973,6 +1125,7 @@ export function ClusterMode({
     onDragOver: (event) => {
       if (
         !carriesCard(event) ||
+        ai.isPending() ||
         movePendingRef.current ||
         mergePendingRef.current ||
         splitPendingRef.current
@@ -1026,7 +1179,11 @@ export function ClusterMode({
   }
 
   const canDrag =
-    isFacilitator && finePointer && !mover.isPending && !clusterWritePending
+    isFacilitator &&
+    finePointer &&
+    !mover.isPending &&
+    !clusterWritePending &&
+    !ai.pending
 
   const renderCard = (
     card: BoardCard,
@@ -1043,6 +1200,7 @@ export function ClusterMode({
         selectControl={selectControl}
         onDragStart={(event) => {
           if (
+            ai.isPending() ||
             movePendingRef.current ||
             mergePendingRef.current ||
             splitPendingRef.current
@@ -1065,7 +1223,7 @@ export function ClusterMode({
               label={moveButtonLabel(card)}
               items={items}
               open={openMenu?.cardId === card.cardId}
-              blocked={mover.isPending || clusterWritePending}
+              blocked={mover.isPending || clusterWritePending || ai.pending}
               onOpenChange={(open) => {
                 if (open) {
                   // A focus request left over from a move must not pull focus
@@ -1110,17 +1268,18 @@ export function ClusterMode({
   }
 
   /** Closes the form only if it is still the one for this cluster. */
-  const closeFormOf = (kind: OpenForm['kind'], clusterId: string) => {
-    setOpenForm((current) =>
-      current?.kind === kind && current.clusterId === clusterId
+  const closeFormOf = (kind: ClusterForm['kind'], clusterId: string) => {
+    setOpenForm((current) => {
+      const form = clusterFormOf(current)
+      return form?.kind === kind && form.clusterId === clusterId
         ? null
-        : current,
-    )
+        : current
+    })
   }
 
   const submitNew = (event: FormEvent) => {
     event.preventDefault()
-    if (createPendingRef.current) {
+    if (createPendingRef.current || ai.isPending()) {
       return
     }
     const checked = validateClusterName(newDraft, clusters)
@@ -1190,7 +1349,7 @@ export function ClusterMode({
     setFocusTarget({ kind: 'split-checkbox', clusterId: cluster.clusterId })
   }
 
-  const cancel = (form: OpenForm) => {
+  const cancel = (form: ClusterForm) => {
     setOpenForm(null)
     setFocusTarget({ kind: OPENER[form.kind], clusterId: form.clusterId })
   }
@@ -1211,6 +1370,7 @@ export function ClusterMode({
   const confirmMerge = (cluster: BoardCluster, form: OpenForm) => {
     if (
       form.kind !== 'merge' ||
+      ai.isPending() ||
       mergePendingRef.current ||
       movePendingRef.current
     ) {
@@ -1269,6 +1429,7 @@ export function ClusterMode({
   const submitSplit = (cluster: BoardCluster, form: OpenForm) => {
     if (
       form.kind !== 'split' ||
+      ai.isPending() ||
       splitPendingRef.current ||
       movePendingRef.current
     ) {
@@ -1309,7 +1470,7 @@ export function ClusterMode({
   }
 
   const saveRename = (cluster: BoardCluster, form: OpenForm) => {
-    if (form.kind !== 'rename' || renamePendingRef.current) {
+    if (form.kind !== 'rename' || renamePendingRef.current || ai.isPending()) {
       return
     }
     const { clusterId } = cluster
@@ -1344,7 +1505,7 @@ export function ClusterMode({
   }
 
   const confirmDelete = (cluster: BoardCluster) => {
-    if (deletePendingRef.current) {
+    if (deletePendingRef.current || ai.isPending()) {
       return
     }
     const { clusterId, name } = cluster
@@ -1367,6 +1528,81 @@ export function ClusterMode({
       })
   }
 
+  /** Whether any cluster write or keep of this view is in flight. */
+  const anyWritePending = () =>
+    createPendingRef.current ||
+    renamePendingRef.current ||
+    deletePendingRef.current ||
+    movePendingRef.current ||
+    mergePendingRef.current ||
+    splitPendingRef.current ||
+    keepPendingRef.current
+
+  const openAiConfirmation = (kind: PanelForm['kind']) => {
+    if (ai.isPending()) {
+      return
+    }
+    setOpenForm({ kind })
+    setFocusTarget({ kind: 'ai-cancel' })
+  }
+
+  const cancelAiConfirmation = () => {
+    const kind = openForm?.kind
+    setOpenForm(null)
+    setFocusTarget({ kind: kind === 'ai-keep' ? 'ai-keep' : 'ai-main' })
+  }
+
+  /**
+   * Sends one AI request (#21). Confirming and Try again both come here;
+   * nothing is sent while a run, a cluster write, or a keep is in flight.
+   */
+  const startAiRun = () => {
+    if (anyWritePending() || !ai.start()) {
+      return
+    }
+    setOpenForm((current) => (current?.kind === 'ai-run' ? null : current))
+    setAnnouncement(AI_GENERATING_ANNOUNCEMENT)
+    setFocusTarget({ kind: 'ai-main' })
+  }
+
+  /** Keep (#21): every AI cluster becomes manual; not optimistic. */
+  const confirmKeep = () => {
+    if (anyWritePending() || ai.isPending()) {
+      return
+    }
+    keepPendingRef.current = true
+    keepMutation
+      .mutateAsync()
+      .then((kept) => {
+        const moveFocus = focusInAiPanel()
+        setOpenForm((current) => (current?.kind === 'ai-keep' ? null : current))
+        setAnnouncement(keptAnnouncement(kept))
+        if (moveFocus) {
+          setPanelFocus({})
+        }
+      })
+      .catch((error: unknown) => {
+        const moveFocus = focusInAiPanel()
+        const code = keepErrorCodeOf(error)
+        const message = keepErrorMessage(code)
+        setOpenForm((current) => (current?.kind === 'ai-keep' ? null : current))
+        if (message === null) {
+          onLostAccess()
+        } else {
+          toast.error(message)
+        }
+        if (code === 'not_project_facilitator') {
+          onNotFacilitator()
+        }
+        if (moveFocus) {
+          setPanelFocus({})
+        }
+      })
+      .finally(() => {
+        keepPendingRef.current = false
+      })
+  }
+
   const createPending = createMutation.isPending
 
   return (
@@ -1375,6 +1611,33 @@ export function ClusterMode({
       data-testid="cluster-board"
       className="min-w-0 space-y-4"
     >
+      {isFacilitator ? (
+        <AiSuggestions
+          counts={aiCounts}
+          confirmation={
+            openForm?.kind === 'ai-run'
+              ? 'run'
+              : openForm?.kind === 'ai-keep'
+                ? 'keep'
+                : null
+          }
+          pending={ai.pending}
+          keepPending={keepMutation.isPending}
+          alert={ai.alert}
+          limitReached={ai.limitReached}
+          onOpenRun={() => {
+            openAiConfirmation('ai-run')
+          }}
+          onOpenKeep={() => {
+            openAiConfirmation('ai-keep')
+          }}
+          onCancel={cancelAiConfirmation}
+          onConfirmRun={startAiRun}
+          onConfirmKeep={confirmKeep}
+          onTryAgain={startAiRun}
+        />
+      ) : null}
+
       {isFacilitator ? (
         <form
           aria-label="New cluster"
@@ -1457,7 +1720,7 @@ export function ClusterMode({
         <div className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {clusters.map((cluster) => {
             const form =
-              openForm?.clusterId === cluster.clusterId ? openForm : null
+              clusterForm?.clusterId === cluster.clusterId ? clusterForm : null
             const cards = cluster.cardIds.flatMap((cardId) => {
               const card = cardsById.get(cardId)
               return card ? [card] : []

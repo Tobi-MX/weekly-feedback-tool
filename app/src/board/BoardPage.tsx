@@ -33,6 +33,7 @@ import {
   ClusterMode,
 } from './ClusterMode'
 import { StageIndicator } from './StageIndicator'
+import { useAiClusteringRun, type AiClusteringRun } from './useAiClustering'
 import {
   BOARD_POLL_INTERVAL_MS,
   cycleBoardQueryKey,
@@ -129,6 +130,7 @@ interface ModeProps {
   readonly onAdvanceFailed: (code: CyclesErrorCode) => void
   readonly onLostAccess: () => void
   readonly onNotFacilitator: () => void
+  readonly ai: AiClusteringRun
 }
 
 const ADVANCE_TARGET: Record<AdvanceFromStatus, CycleStatus> = {
@@ -146,6 +148,7 @@ function BoardMode({
   onAdvanceFailed,
   onLostAccess,
   onNotFacilitator,
+  ai,
 }: ModeProps) {
   const { status, isRevealed, cards } = board
   let heading: string
@@ -243,6 +246,7 @@ function BoardMode({
           isFacilitator={isFacilitator}
           onLostAccess={onLostAccess}
           onNotFacilitator={onNotFacilitator}
+          ai={ai}
         />
       ) : isRevealed ? (
         <BoardCardList cards={cards} />
@@ -437,6 +441,14 @@ function BoardScreen({ cycleId }: { cycleId: string }) {
     setLostAccess(true)
   }, [])
 
+  // The AI clustering request (#21) lives here, above the cluster view, so
+  // it and its result handling survive a stage change.
+  const ai = useAiClusteringRun({
+    cycleId,
+    onLostAccess: loseAccess,
+    onNotFacilitator,
+  })
+
   const retry = () => {
     if (cycleQuery.isError) {
       void cycleQuery.refetch()
@@ -495,6 +507,7 @@ function BoardScreen({ cycleId }: { cycleId: string }) {
           onAdvanceFailed={onAdvanceFailed}
           onLostAccess={loseAccess}
           onNotFacilitator={onNotFacilitator}
+          ai={ai}
         />
       </>
     )
