@@ -15,7 +15,10 @@
 -- collecting and reveal, revealed through start_retrospective, moved to
 -- cluster through advance_stage, with clusters from create_cluster and cards
 -- placed through move_card or inserted as postgres; then vote, discuss (as
--- postgres), and closed through close_cycle. Q1 (Q) is C's.
+-- postgres), and closed through close_cycle. Q1 (Q) is C's. Since #19b only
+-- the current facilitator may merge and split, so the successful calls run as
+-- A (or as B while A has handed B the role); cluster_facilitator.test.sql
+-- covers the role rule itself.
 
 begin;
 
@@ -98,7 +101,7 @@ language sql
 immutable
 as $$
   select jsonb_build_object(
-    'code', case when p_message = 'not_project_member' then '42501' else 'P0001' end,
+    'code', case when p_message in ('not_project_member', 'not_project_facilitator') then '42501' else 'P0001' end,
     'message', p_message,
     'detail', '',
     'hint', ''
@@ -265,6 +268,17 @@ as $$
 begin
   perform ms_test.become(p_user);
   perform 1 from public.close_cycle(ms_test.id(p_cycle));
+end;
+$$;
+
+-- transfer_facilitator on P as the user (#19b's parity check).
+create function ms_test.transfer(p_user text, p_to text)
+returns void
+language plpgsql
+as $$
+begin
+  perform ms_test.become(p_user);
+  perform public.transfer_facilitator(ms_test.id('P'), ms_test.id(p_to));
 end;
 $$;
 
@@ -676,16 +690,16 @@ select is(
 );
 select is((select (count(*) filter (where a.grantee = 0))::int from pg_proc p left join lateral aclexplode(p.proacl) a on true where p.oid in ('public.merge_clusters(uuid, uuid)'::regprocedure, 'public.split_cluster(uuid, uuid[], text)'::regprocedure)), 0, 'PUBLIC cannot execute either');
 select is((select bool_and(p.prosrc ~ 'from public\.feedback_cycles fc\s+where fc\.id = \w+\s+for update;') from pg_proc p where p.oid in ('public.merge_clusters(uuid, uuid)'::regprocedure, 'public.split_cluster(uuid, uuid[], text)'::regprocedure)), true, 'both lock the cycle row FOR UPDATE on public.feedback_cycles');
-select is((select bool_or(p.prosrc ~* '(cycle_events|card_authors|profiles|created_at|updated_at|is_project_facilitator|owner_id|execute|raise\s+notice)') from pg_proc p where p.oid in ('public.merge_clusters(uuid, uuid)'::regprocedure, 'public.split_cluster(uuid, uuid[], text)'::regprocedure)), false, 'neither mentions cycle_events, card_authors, profiles, timestamps, facilitator, owner, dynamic SQL, or notice');
+select is((select bool_or(p.prosrc ~* '(cycle_events|card_authors|profiles|created_at|updated_at|owner_id|execute|raise\s+notice)') from pg_proc p where p.oid in ('public.merge_clusters(uuid, uuid)'::regprocedure, 'public.split_cluster(uuid, uuid[], text)'::regprocedure)), false, 'neither mentions cycle_events, card_authors, profiles, timestamps, owner, dynamic SQL, or notice');
 select is((select bool_and(p.prosrc ~ '\(select auth\.uid\(\)\) is null' and p.prosrc ~ 'private\.is_project_member\(cycle_project\)') from pg_proc p where p.oid in ('public.merge_clusters(uuid, uuid)'::regprocedure, 'public.split_cluster(uuid, uuid[], text)'::regprocedure)), true, 'both check (select auth.uid()) and use private.is_project_member');
 select is(
   (select array_agg(distinct m.msg[1]::text order by m.msg[1]::text) from pg_proc p cross join lateral regexp_matches(p.prosrc, 'message\s*=\s*''([^'']*)''', 'g') as m(msg) where p.oid = 'public.merge_clusters(uuid, uuid)'::regprocedure),
-  array['cannot_merge_into_self', 'cluster_not_found', 'cycle_not_clustering', 'not_project_member'],
+  array['cannot_merge_into_self', 'cluster_not_found', 'cycle_not_clustering', 'not_project_facilitator', 'not_project_member'],
   'merge_clusters raises exactly the messages of the error table'
 );
 select is(
   (select array_agg(distinct m.msg[1]::text order by m.msg[1]::text) from pg_proc p cross join lateral regexp_matches(p.prosrc, 'message\s*=\s*''([^'']*)''', 'g') as m(msg) where p.oid = 'public.split_cluster(uuid, uuid[], text)'::regprocedure),
-  array['card_not_in_cluster', 'cluster_limit_reached', 'cluster_name_taken', 'cluster_not_found', 'cycle_not_clustering', 'invalid_card_selection', 'invalid_cluster_name', 'not_project_member', 'split_takes_all_cards'],
+  array['card_not_in_cluster', 'cluster_limit_reached', 'cluster_name_taken', 'cluster_not_found', 'cycle_not_clustering', 'invalid_card_selection', 'invalid_cluster_name', 'not_project_facilitator', 'not_project_member', 'split_takes_all_cards'],
   'split_cluster raises exactly the messages of the error table'
 );
 select is(
@@ -726,8 +740,8 @@ select is(
 select ms_test.snap('P0 state', to_jsonb(ms_test.state('P0')));
 select ms_test.mark();
 set local role authenticated;
-select is(ms_test.mg('B', 'P0y', 'P0x'), ms_test.e('cycle_not_clustering'), 'closed from collecting: merge_clusters gets cycle_not_clustering');
-select is(ms_test.sp('B', 'P0x', array['p0a'], 'New'), ms_test.e('cycle_not_clustering'), 'closed from collecting: split_cluster gets cycle_not_clustering');
+select is(ms_test.mg('A', 'P0y', 'P0x'), ms_test.e('cycle_not_clustering'), 'closed from collecting: merge_clusters gets cycle_not_clustering');
+select is(ms_test.sp('A', 'P0x', array['p0a'], 'New'), ms_test.e('cycle_not_clustering'), 'closed from collecting: split_cluster gets cycle_not_clustering');
 reset role;
 select is(to_jsonb(ms_test.state('P0')), ms_test.snapped('P0 state'), 'closed from collecting: the rows are unchanged');
 select is(ms_test.new_events('P0'), '[]'::jsonb, 'closed from collecting: no event');
@@ -747,8 +761,8 @@ values
 select ms_test.snap('state', to_jsonb(ms_test.state()));
 select ms_test.mark();
 set local role authenticated;
-select is(ms_test.mg('B', 'W2', 'W1'), ms_test.e('cycle_not_clustering'), 'collecting: merge_clusters gets cycle_not_clustering');
-select is(ms_test.sp('B', 'W1', array['a'], 'New'), ms_test.e('cycle_not_clustering'), 'collecting: split_cluster gets cycle_not_clustering');
+select is(ms_test.mg('A', 'W2', 'W1'), ms_test.e('cycle_not_clustering'), 'collecting: merge_clusters gets cycle_not_clustering');
+select is(ms_test.sp('A', 'W1', array['a'], 'New'), ms_test.e('cycle_not_clustering'), 'collecting: split_cluster gets cycle_not_clustering');
 reset role;
 select is(ms_test.new_events(), '[]'::jsonb, 'collecting: no event');
 set local role authenticated;
@@ -756,8 +770,8 @@ select ms_test.start('A', 'P1');
 reset role;
 select ms_test.mark();
 set local role authenticated;
-select is(ms_test.mg('B', 'W2', 'W1'), ms_test.e('cycle_not_clustering'), 'reveal: merge_clusters gets cycle_not_clustering');
-select is(ms_test.sp('B', 'W1', array['a'], 'New'), ms_test.e('cycle_not_clustering'), 'reveal: split_cluster gets cycle_not_clustering');
+select is(ms_test.mg('A', 'W2', 'W1'), ms_test.e('cycle_not_clustering'), 'reveal: merge_clusters gets cycle_not_clustering');
+select is(ms_test.sp('A', 'W1', array['a'], 'New'), ms_test.e('cycle_not_clustering'), 'reveal: split_cluster gets cycle_not_clustering');
 reset role;
 select is(to_jsonb(ms_test.state()), ms_test.snapped('state'), 'collecting and reveal: the rows are unchanged');
 select is(ms_test.new_events(), '[]'::jsonb, 'reveal: no event');
@@ -769,13 +783,13 @@ delete from public.clusters where id in (ms_test.id('W1'), ms_test.id('W2'));
 set local role authenticated;
 select ms_test.advance('A', 'P1', 'reveal');
 select ms_test.mk('A', 'T');
-select ms_test.mk('D', 'S');
+select ms_test.mk('A', 'S');
 select ms_test.mk('A', 'Z');
 select ms_test.mk('A', 'Gone');
 select ms_test.del('A', 'Gone');
 select ms_test.mv('A', 'a', 'T');
-select ms_test.mv('B', 'b', 'T');
-select ms_test.mv('D', 'c', 'S');
+select ms_test.mv('A', 'b', 'T');
+select ms_test.mv('A', 'c', 'S');
 select ms_test.mv('A', 'd', 'S');
 select ms_test.mv('A', 'e', 'Z');
 reset role;
@@ -786,7 +800,7 @@ select ms_test.snap('ungrouped', to_jsonb(ms_test.ungrouped()));
 select ms_test.snap('cards', to_jsonb(ms_test.cards_state()));
 select ms_test.mark();
 set local role authenticated;
-select is(ms_test.mg('B', 'S', 'T'), ms_test.row_of('T', 'T', 'manual'), 'B merges S into T and gets T''s id, name, and manual');
+select is(ms_test.mg('A', 'S', 'T'), ms_test.row_of('T', 'T', 'manual'), 'A merges S into T and gets T''s id, name, and manual');
 reset role;
 select is(ms_test.list('T'), array['a', 'b', 'c', 'd'], 'T has [a, b, c, d]');
 select is(ms_test.orders('T'), array[0, 1, 2, 3], 'numbered 0 .. 3');
@@ -807,7 +821,7 @@ select is(ms_test.new_other_events(), 0, 'and no other cycle''s events');
 select ms_test.snap('state', to_jsonb(ms_test.state()));
 select ms_test.mark();
 set local role authenticated;
-select is(ms_test.mg('B', 'T', 'S'), ms_test.e('cluster_not_found'), 'the opposite merge after it gets cluster_not_found');
+select is(ms_test.mg('A', 'T', 'S'), ms_test.e('cluster_not_found'), 'the opposite merge after it gets cluster_not_found');
 select is(ms_test.mg('A', 'S', 'T'), ms_test.e('cluster_not_found'), 'the same merge again gets cluster_not_found');
 reset role;
 select is(to_jsonb(ms_test.state()), ms_test.snapped('state'), 'and changes nothing');
@@ -828,7 +842,7 @@ values
 select ms_test.snap('expected', to_jsonb(ms_test.list('T2') || ms_test.list('S2')));
 select ms_test.snap('T2 order', to_jsonb(ms_test.cluster_order('T2')));
 set local role authenticated;
-select is(ms_test.mg('D', 'S2', 'T2'), ms_test.row_of('T2', 'Stale target', 'manual'), 'D merges AI cluster S2 into AI cluster T2');
+select is(ms_test.mg('A', 'S2', 'T2'), ms_test.row_of('T2', 'Stale target', 'manual'), 'A merges AI cluster S2 into AI cluster T2');
 reset role;
 select is(to_jsonb(ms_test.list('T2')), ms_test.snapped('expected'), 'stale order: T2''s (sort_order, card_id) order, then S2''s');
 select is((ms_test.list('T2'))[3], 'f', 'T2''s two sort_order 0 cards come before its sort_order 1 card');
@@ -848,17 +862,17 @@ values
 select ms_test.snap('TA row', ms_test.cluster_row('TA'));
 select ms_test.snap('TA cards', jsonb_build_object('list', ms_test.list('TA'), 'orders', ms_test.orders('TA')));
 set local role authenticated;
-select is(ms_test.mg('B', 'E', 'TA'), ms_test.row_of('TA', 'AI target', 'ai'), 'merging an empty source into an AI target returns it unchanged');
+select is(ms_test.mg('A', 'E', 'TA'), ms_test.row_of('TA', 'AI target', 'ai'), 'merging an empty source into an AI target returns it unchanged');
 reset role;
 select is(ms_test.exists_cluster('E'), false, 'the empty source is deleted');
 select is(ms_test.cluster_row('TA'), ms_test.snapped('TA row'), 'the target row (source, updated_at, sort_order) is unchanged');
 select is(jsonb_build_object('list', ms_test.list('TA'), 'orders', ms_test.orders('TA')), ms_test.snapped('TA cards'), 'its cards and their stale sort_order are unchanged');
 set local role authenticated;
-select ms_test.mk('B', 'Empty two');
+select ms_test.mk('A', 'Empty two');
 reset role;
 select ms_test.snap('Z row', ms_test.cluster_row('Z'));
 set local role authenticated;
-select is(ms_test.mg('B', 'Empty two', 'Z'), ms_test.row_of('Z', 'Z', 'manual'), 'merging an empty source into a manual target succeeds');
+select is(ms_test.mg('A', 'Empty two', 'Z'), ms_test.row_of('Z', 'Z', 'manual'), 'merging an empty source into a manual target succeeds');
 reset role;
 select is(ms_test.cluster_row('Z'), ms_test.snapped('Z row'), 'and leaves the manual target row unchanged');
 select is(ms_test.list('Z'), array['e'], 'and its cards');
@@ -869,9 +883,9 @@ delete from public.clusters where id = ms_test.id('TA');
 insert into public.clusters (id, cycle_id, name, source, sort_order)
 values (ms_test.id('ET'), ms_test.id('P1'), 'Empty target', 'ai', 401);
 set local role authenticated;
-select ms_test.mk('D', 'SS');
-select ms_test.mv('D', 'o', 'SS');
-select ms_test.mv('D', 'p', 'SS');
+select ms_test.mk('A', 'SS');
+select ms_test.mv('A', 'o', 'SS');
+select ms_test.mv('A', 'p', 'SS');
 select is(ms_test.mg('A', 'SS', 'ET'), ms_test.row_of('ET', 'Empty target', 'manual'), 'merging into an empty AI target succeeds');
 reset role;
 select is(ms_test.list('ET'), array['o', 'p'], 'the target gets the source''s cards in order');
@@ -882,13 +896,13 @@ select is(ms_test.source('ET'), 'manual', 'and becomes manual');
 select ms_test.snap('state', to_jsonb(ms_test.state()));
 select ms_test.mark();
 set local role authenticated;
-select is(ms_test.mg('B', 'T', 'T'), ms_test.e('cannot_merge_into_self'), 'merging a cluster into itself gets cannot_merge_into_self');
-select is(ms_test.mg_raw('B', ms_test.id('T'), null), ms_test.e('cluster_not_found'), 'a null target gets cluster_not_found');
-select is(ms_test.mg_raw('B', ms_test.id('T'), gen_random_uuid()), ms_test.e('cluster_not_found'), 'a random target gets cluster_not_found');
-select is(ms_test.mg('B', 'T', 'Gone'), ms_test.e('cluster_not_found'), 'a deleted target gets cluster_not_found');
-select is(ms_test.mg('B', 'T', 'P0x'), ms_test.e('cluster_not_found'), 'a target in another cycle of P gets cluster_not_found');
-select is(ms_test.mg_raw('B', null, ms_test.id('T')), ms_test.e('cluster_not_found'), 'a null source gets cluster_not_found');
-select is(ms_test.mg_raw('B', gen_random_uuid(), ms_test.id('T')), ms_test.e('cluster_not_found'), 'a random source gets cluster_not_found');
+select is(ms_test.mg('A', 'T', 'T'), ms_test.e('cannot_merge_into_self'), 'merging a cluster into itself gets cannot_merge_into_self');
+select is(ms_test.mg_raw('A', ms_test.id('T'), null), ms_test.e('cluster_not_found'), 'a null target gets cluster_not_found');
+select is(ms_test.mg_raw('A', ms_test.id('T'), gen_random_uuid()), ms_test.e('cluster_not_found'), 'a random target gets cluster_not_found');
+select is(ms_test.mg('A', 'T', 'Gone'), ms_test.e('cluster_not_found'), 'a deleted target gets cluster_not_found');
+select is(ms_test.mg('A', 'T', 'P0x'), ms_test.e('cluster_not_found'), 'a target in another cycle of P gets cluster_not_found');
+select is(ms_test.mg_raw('A', null, ms_test.id('T')), ms_test.e('cluster_not_found'), 'a null source gets cluster_not_found');
+select is(ms_test.mg_raw('A', gen_random_uuid(), ms_test.id('T')), ms_test.e('cluster_not_found'), 'a random source gets cluster_not_found');
 select is(ms_test.mg('C', 'Z', 'T'), ms_test.e('cluster_not_found'), 'non-member C merging P''s clusters gets cluster_not_found');
 select is(ms_test.mg('C', 'Z', 'T'), ms_test.mg_raw('C', gen_random_uuid(), ms_test.id('T')), 'identical for an existing and a random source');
 select is(ms_test.mg(null, 'Z', 'T'), ms_test.e('not_project_member'), 'a null auth.uid() gets not_project_member');
@@ -903,9 +917,9 @@ select ms_test.snap('max order', to_jsonb(ms_test.max_order('P1')));
 select ms_test.snap('others', to_jsonb(ms_test.others(array['T'])));
 select ms_test.mark();
 set local role authenticated;
-select ms_test.snap('split', ms_test.sp('B', 'T', array['d', 'b'], '  Tools  ', 'Tools'));
+select ms_test.snap('split', ms_test.sp('A', 'T', array['d', 'b'], '  Tools  ', 'Tools'));
 reset role;
-select is(ms_test.snapped('split'), ms_test.row_of('Tools', 'Tools', 'manual'), 'B splits [d, b] out of T = [a, b, c, d] and gets the new cluster''s id, Tools, manual');
+select is(ms_test.snapped('split'), ms_test.row_of('Tools', 'Tools', 'manual'), 'A splits [d, b] out of T = [a, b, c, d] and gets the new cluster''s id, Tools, manual');
 select is(ms_test.id('Tools') is not null and ms_test.id('Tools') <> ms_test.id('T'), true, 'the id is new');
 select is(ms_test.list('Tools'), array['b', 'd'], 'the new cluster has [b, d]: source order, not array order');
 select is(ms_test.orders('Tools'), array[0, 1], 'numbered 0, 1');
@@ -923,7 +937,7 @@ select is((select count(*)::int from jsonb_array_elements(ms_test.new_events()) 
 select is(ms_test.new_other_events(), 0, 'and no other cycle''s events');
 
 set local role authenticated;
-select is(ms_test.sp('D', 'Tools', array['d'], 'Solo', 'Solo') -> 0 ->> 'name', 'Solo', 'splitting one card out of a two-card cluster succeeds');
+select is(ms_test.sp('A', 'Tools', array['d'], 'Solo', 'Solo') -> 0 ->> 'name', 'Solo', 'splitting one card out of a two-card cluster succeeds');
 reset role;
 select is(ms_test.list('Tools'), array['b'], 'one card stays');
 select is(ms_test.list('Solo'), array['d'], 'one card moves');
@@ -948,30 +962,30 @@ select is(ms_test.source('AIY'), 'ai', 'an untouched AI cluster stays ai');
 select ms_test.snap('state', to_jsonb(ms_test.state()));
 select ms_test.mark();
 set local role authenticated;
-select is(ms_test.sp_raw('B', ms_test.id('AIX'), null, 'New'), ms_test.e('invalid_card_selection'), 'a null selection gets invalid_card_selection');
-select is(ms_test.sp_raw('B', ms_test.id('AIX'), '{}', 'New'), ms_test.e('invalid_card_selection'), 'an empty selection gets invalid_card_selection');
-select is(ms_test.sp('B', 'AIX', array['r', 'r'], 'New'), ms_test.e('invalid_card_selection'), 'a duplicate id gets invalid_card_selection');
-select is(ms_test.sp_raw('B', ms_test.id('AIX'), array[null]::uuid[], 'New'), ms_test.e('invalid_card_selection'), 'a null element gets invalid_card_selection');
-select is(ms_test.sp('B', 'AIX', array['m'], 'New'), ms_test.e('card_not_in_cluster'), 'an ungrouped card gets card_not_in_cluster');
-select is(ms_test.sp('B', 'AIX', array['a'], 'New'), ms_test.e('card_not_in_cluster'), 'a card of another cluster gets card_not_in_cluster');
-select is(ms_test.sp('B', 'AIX', array['p0a'], 'New'), ms_test.e('card_not_in_cluster'), 'a card of another cycle gets card_not_in_cluster');
-select is(ms_test.sp('B', 'AIX', array['q'], 'New'), ms_test.e('card_not_in_cluster'), 'a card of project Q gets card_not_in_cluster');
-select is(ms_test.sp_raw('B', ms_test.id('AIX'), array[gen_random_uuid()], 'New'), ms_test.e('card_not_in_cluster'), 'a random id gets card_not_in_cluster');
-select is(ms_test.sp_raw('B', ms_test.id('AIX'), array[ms_test.id('r'), gen_random_uuid()], 'New'), ms_test.e('card_not_in_cluster'), 'one good and one random id gets card_not_in_cluster');
-select is(ms_test.sp('B', 'AIX', array['s', 'r'], 'New'), ms_test.e('split_takes_all_cards'), 'every card of the cluster gets split_takes_all_cards');
-select is(ms_test.sp('B', 'Tools', array['b'], 'New'), ms_test.e('split_takes_all_cards'), 'the one card of a one-card cluster gets split_takes_all_cards');
-select is(ms_test.sp('B', 'AIX', array['r'], null), ms_test.e('invalid_cluster_name'), 'a null name gets invalid_cluster_name');
-select is(ms_test.sp('B', 'AIX', array['r'], ''), ms_test.e('invalid_cluster_name'), 'an empty name gets invalid_cluster_name');
-select is(ms_test.sp('B', 'AIX', array['r'], '   '), ms_test.e('invalid_cluster_name'), 'a blank name gets invalid_cluster_name');
-select is(ms_test.sp('B', 'AIX', array['r'], repeat('x', 101)), ms_test.e('invalid_cluster_name'), 'a 101-character name gets invalid_cluster_name');
-select is(ms_test.sp('B', 'AIX', array['r'], 'a' || E'\n' || 'b'), ms_test.e('invalid_cluster_name'), 'a name with a line feed inside gets invalid_cluster_name');
-select is(ms_test.sp('B', 'AIX', array['r'], 'ai X'), ms_test.e('cluster_name_taken'), 'the split cluster''s own name in another case gets cluster_name_taken');
-select is(ms_test.sp('B', 'AIX', array['r'], 'TOOLS'), ms_test.e('cluster_name_taken'), 'another cluster''s name in any case gets cluster_name_taken');
+select is(ms_test.sp_raw('A', ms_test.id('AIX'), null, 'New'), ms_test.e('invalid_card_selection'), 'a null selection gets invalid_card_selection');
+select is(ms_test.sp_raw('A', ms_test.id('AIX'), '{}', 'New'), ms_test.e('invalid_card_selection'), 'an empty selection gets invalid_card_selection');
+select is(ms_test.sp('A', 'AIX', array['r', 'r'], 'New'), ms_test.e('invalid_card_selection'), 'a duplicate id gets invalid_card_selection');
+select is(ms_test.sp_raw('A', ms_test.id('AIX'), array[null]::uuid[], 'New'), ms_test.e('invalid_card_selection'), 'a null element gets invalid_card_selection');
+select is(ms_test.sp('A', 'AIX', array['m'], 'New'), ms_test.e('card_not_in_cluster'), 'an ungrouped card gets card_not_in_cluster');
+select is(ms_test.sp('A', 'AIX', array['a'], 'New'), ms_test.e('card_not_in_cluster'), 'a card of another cluster gets card_not_in_cluster');
+select is(ms_test.sp('A', 'AIX', array['p0a'], 'New'), ms_test.e('card_not_in_cluster'), 'a card of another cycle gets card_not_in_cluster');
+select is(ms_test.sp('A', 'AIX', array['q'], 'New'), ms_test.e('card_not_in_cluster'), 'a card of project Q gets card_not_in_cluster');
+select is(ms_test.sp_raw('A', ms_test.id('AIX'), array[gen_random_uuid()], 'New'), ms_test.e('card_not_in_cluster'), 'a random id gets card_not_in_cluster');
+select is(ms_test.sp_raw('A', ms_test.id('AIX'), array[ms_test.id('r'), gen_random_uuid()], 'New'), ms_test.e('card_not_in_cluster'), 'one good and one random id gets card_not_in_cluster');
+select is(ms_test.sp('A', 'AIX', array['s', 'r'], 'New'), ms_test.e('split_takes_all_cards'), 'every card of the cluster gets split_takes_all_cards');
+select is(ms_test.sp('A', 'Tools', array['b'], 'New'), ms_test.e('split_takes_all_cards'), 'the one card of a one-card cluster gets split_takes_all_cards');
+select is(ms_test.sp('A', 'AIX', array['r'], null), ms_test.e('invalid_cluster_name'), 'a null name gets invalid_cluster_name');
+select is(ms_test.sp('A', 'AIX', array['r'], ''), ms_test.e('invalid_cluster_name'), 'an empty name gets invalid_cluster_name');
+select is(ms_test.sp('A', 'AIX', array['r'], '   '), ms_test.e('invalid_cluster_name'), 'a blank name gets invalid_cluster_name');
+select is(ms_test.sp('A', 'AIX', array['r'], repeat('x', 101)), ms_test.e('invalid_cluster_name'), 'a 101-character name gets invalid_cluster_name');
+select is(ms_test.sp('A', 'AIX', array['r'], 'a' || E'\n' || 'b'), ms_test.e('invalid_cluster_name'), 'a name with a line feed inside gets invalid_cluster_name');
+select is(ms_test.sp('A', 'AIX', array['r'], 'ai X'), ms_test.e('cluster_name_taken'), 'the split cluster''s own name in another case gets cluster_name_taken');
+select is(ms_test.sp('A', 'AIX', array['r'], 'TOOLS'), ms_test.e('cluster_name_taken'), 'another cluster''s name in any case gets cluster_name_taken');
 select is(ms_test.sp(null, 'AIX', array['r'], 'New'), ms_test.e('not_project_member'), 'a null auth.uid() gets not_project_member');
-select is(ms_test.sp_raw('B', null, array[ms_test.id('r')], 'New'), ms_test.e('cluster_not_found'), 'a null cluster id gets cluster_not_found');
-select is(ms_test.sp_raw('B', gen_random_uuid(), array[ms_test.id('r')], 'New'), ms_test.e('cluster_not_found'), 'a random cluster id gets cluster_not_found');
-select is(ms_test.sp('B', 'Gone', array['r'], 'New'), ms_test.e('cluster_not_found'), 'a deleted cluster gets cluster_not_found');
-select is(ms_test.sp('B', 'S', array['r'], 'New'), ms_test.e('cluster_not_found'), 'a merged-away cluster gets cluster_not_found');
+select is(ms_test.sp_raw('A', null, array[ms_test.id('r')], 'New'), ms_test.e('cluster_not_found'), 'a null cluster id gets cluster_not_found');
+select is(ms_test.sp_raw('A', gen_random_uuid(), array[ms_test.id('r')], 'New'), ms_test.e('cluster_not_found'), 'a random cluster id gets cluster_not_found');
+select is(ms_test.sp('A', 'Gone', array['r'], 'New'), ms_test.e('cluster_not_found'), 'a deleted cluster gets cluster_not_found');
+select is(ms_test.sp('A', 'S', array['r'], 'New'), ms_test.e('cluster_not_found'), 'a merged-away cluster gets cluster_not_found');
 select is(ms_test.sp('C', 'AIX', array['r'], 'New'), ms_test.e('cluster_not_found'), 'non-member C on P''s cluster gets cluster_not_found');
 select is(ms_test.sp('C', 'AIX', array['r'], 'New'), ms_test.sp_raw('C', gen_random_uuid(), array[ms_test.id('r')], 'New'), 'identical for an existing and a random cluster id');
 reset role;
@@ -979,7 +993,7 @@ select is(to_jsonb(ms_test.state()), ms_test.snapped('state'), 'after every fail
 select is(ms_test.new_events(), '[]'::jsonb, 'the failed splits recorded no event');
 
 set local role authenticated;
-select is(ms_test.sp('B', 'AIX', array['r'], repeat('y', 100)) -> 0 ->> 'name', repeat('y', 100), 'a 100-character name succeeds');
+select is(ms_test.sp('A', 'AIX', array['r'], repeat('y', 100)) -> 0 ->> 'name', repeat('y', 100), 'a 100-character name succeeds');
 reset role;
 
 -- The 50-cluster limit.
@@ -990,7 +1004,7 @@ select is(ms_test.cluster_count('P1'), 50, 'the cycle has 50 clusters');
 select ms_test.snap('state', to_jsonb(ms_test.state()));
 select ms_test.mark();
 set local role authenticated;
-select is(ms_test.sp('B', 'ET', array['o'], 'Fifty-one'), ms_test.e('cluster_limit_reached'), 'a valid split at 50 clusters gets cluster_limit_reached');
+select is(ms_test.sp('A', 'ET', array['o'], 'Fifty-one'), ms_test.e('cluster_limit_reached'), 'a valid split at 50 clusters gets cluster_limit_reached');
 reset role;
 select is(ms_test.cluster_count('P1'), 50, 'the count stays 50');
 select is(to_jsonb(ms_test.state()), ms_test.snapped('state'), 'and the rows are unchanged');
@@ -998,15 +1012,18 @@ select is(ms_test.new_events(), '[]'::jsonb, 'and no event is recorded');
 delete from public.clusters where cycle_id = ms_test.id('P1') and name like 'Filler %';
 
 -- ---------------------------------------------------------------------------
--- A and B get identical results; own anonymous and others' attributed cards
--- behave the same.
+-- A (owner and facilitator) and B (facilitator after a transfer) get
+-- identical results; own anonymous and others' attributed cards behave the
+-- same.
 -- ---------------------------------------------------------------------------
 select is(ms_test.ungrouped() @> array['k', 'l', 'm', 'n'], true, 'k, l, m, n are ungrouped');
 set local role authenticated;
 select ms_test.snap('sequence A', ms_test.sequence('A'));
+select ms_test.transfer('A', 'B');
 select ms_test.snap('sequence B', ms_test.sequence('B'));
+select ms_test.transfer('A', 'A');
 reset role;
-select is(ms_test.snapped('sequence A'), ms_test.snapped('sequence B'), 'the owner/facilitator and a member get identical results');
+select is(ms_test.snapped('sequence A'), ms_test.snapped('sequence B'), 'the owner as facilitator and a member as facilitator get identical results');
 select is((select bool_and(jsonb_typeof(s -> 'result') = 'array') from jsonb_array_elements(ms_test.snapped('sequence B')) s), true, 'B splits its own anonymous card and A''s attributed card alike, and every merge succeeds');
 select is(ms_test.snapped('sequence B') -> 4 -> 'T', '["m", "l", "k", "n"]'::jsonb, 'the sequence ends with every card in Seq T');
 select is(ms_test.snapped('sequence B') -> 4 -> 'T orders', '[0, 1, 2, 3]'::jsonb, 'numbered 0 .. 3');
@@ -1021,20 +1038,20 @@ reset role;
 select ms_test.snap('state', to_jsonb(ms_test.state()));
 select ms_test.mark();
 set local role authenticated;
-select is(ms_test.mg('B', 'Tools', 'T'), ms_test.e('cycle_not_clustering'), 'vote: merge_clusters gets cycle_not_clustering');
-select is(ms_test.sp('B', 'ET', array['o'], 'New'), ms_test.e('cycle_not_clustering'), 'vote: split_cluster gets cycle_not_clustering');
+select is(ms_test.mg('A', 'Tools', 'T'), ms_test.e('cycle_not_clustering'), 'vote: merge_clusters gets cycle_not_clustering');
+select is(ms_test.sp('A', 'ET', array['o'], 'New'), ms_test.e('cycle_not_clustering'), 'vote: split_cluster gets cycle_not_clustering');
 reset role;
 update public.feedback_cycles set status = 'discuss', voting_closed_at = now() where id = ms_test.id('P1');
 select ms_test.mark();
 set local role authenticated;
-select is(ms_test.mg('B', 'Tools', 'T'), ms_test.e('cycle_not_clustering'), 'discuss: merge_clusters gets cycle_not_clustering');
-select is(ms_test.sp('B', 'ET', array['o'], 'New'), ms_test.e('cycle_not_clustering'), 'discuss: split_cluster gets cycle_not_clustering');
+select is(ms_test.mg('A', 'Tools', 'T'), ms_test.e('cycle_not_clustering'), 'discuss: merge_clusters gets cycle_not_clustering');
+select is(ms_test.sp('A', 'ET', array['o'], 'New'), ms_test.e('cycle_not_clustering'), 'discuss: split_cluster gets cycle_not_clustering');
 select ms_test.close('A', 'P1');
 reset role;
 select ms_test.mark();
 set local role authenticated;
-select is(ms_test.mg('B', 'Tools', 'T'), ms_test.e('cycle_not_clustering'), 'closed after reveal: merge_clusters gets cycle_not_clustering');
-select is(ms_test.sp('B', 'ET', array['o'], 'New'), ms_test.e('cycle_not_clustering'), 'closed after reveal: split_cluster gets cycle_not_clustering');
+select is(ms_test.mg('A', 'Tools', 'T'), ms_test.e('cycle_not_clustering'), 'closed after reveal: merge_clusters gets cycle_not_clustering');
+select is(ms_test.sp('A', 'ET', array['o'], 'New'), ms_test.e('cycle_not_clustering'), 'closed after reveal: split_cluster gets cycle_not_clustering');
 reset role;
 select is(to_jsonb(ms_test.state()), ms_test.snapped('state'), 'vote, discuss, and closed: the rows are unchanged');
 select is(ms_test.new_events(), '[]'::jsonb, 'the refused calls recorded no event');
