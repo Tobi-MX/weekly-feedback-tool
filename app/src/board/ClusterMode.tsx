@@ -62,8 +62,13 @@ import {
   useSplitCluster,
 } from './useClusters'
 
+/** The Cluster stage's intro for the facilitator, who edits the clusters. */
 export const CLUSTER_INTRO =
-  'Group related cards into clusters. Everyone in the project can add, rename and delete clusters until voting starts.'
+  'Group related cards into clusters. Only you, as the facilitator, can change clusters until voting starts.'
+
+/** The intro for everyone else, who sees the same board read-only (#19b). */
+export const CLUSTER_READ_ONLY_INTRO =
+  'The facilitator is grouping the cards into clusters. Changes appear here as they are made, until voting starts.'
 
 const inputClass = cn(
   'block h-9 w-full min-w-0 rounded-md border border-input bg-background px-3 py-1 text-sm aria-invalid:border-destructive',
@@ -184,6 +189,23 @@ interface DragState {
 
 const UNGROUPED_TARGET = 'ungrouped'
 
+/**
+ * Whether focus is on one of the cluster controls: inside the cluster board
+ * (only controls are focusable there) or in an open Move menu, which renders
+ * in a portal.
+ */
+function focusInClusterControls(): boolean {
+  const active = document.activeElement
+  return (
+    active instanceof Element &&
+    active !== document.body &&
+    active.closest('[data-testid="cluster-board"], [data-move-menu]') !== null
+  )
+}
+
+/** The board's mode heading, where focus goes when the controls vanish. */
+const MODE_HEADING_ID = 'board-mode-heading'
+
 function sameAnchor(a: CardAnchor, b: CardAnchor): boolean {
   return (
     a.group === b.group &&
@@ -238,6 +260,8 @@ function InlineError({ id, text }: { id: string; text: string }) {
 }
 
 interface ClusterSectionProps {
+  /** False for everyone but the facilitator: no control, no drop target. */
+  readonly editable: boolean
   readonly cluster: BoardCluster
   readonly cards: readonly BoardCard[]
   readonly renderCard: (
@@ -271,6 +295,7 @@ interface ClusterSectionProps {
 }
 
 function ClusterSection({
+  editable,
   cluster,
   cards,
   renderCard,
@@ -531,7 +556,7 @@ function ClusterSection({
         </div>
       </form>
     )
-  } else if (form === null) {
+  } else if (form === null && editable) {
     controls = (
       <div className="flex flex-wrap gap-2">
         <Button
@@ -586,12 +611,12 @@ function ClusterSection({
     <section
       aria-labelledby={form?.kind === 'rename' ? undefined : headingId}
       aria-label={form?.kind === 'rename' ? name : undefined}
-      data-drop-target={clusterId}
+      data-drop-target={editable ? clusterId : undefined}
       className={cn(
         'min-w-0 space-y-3 rounded-lg border bg-card p-4 text-card-foreground',
-        dropActive && 'ring-2 ring-primary',
+        editable && dropActive && 'ring-2 ring-primary',
       )}
-      {...dropTarget}
+      {...(editable ? dropTarget : {})}
     >
       {header}
       {cards.length === 0 ? (
@@ -635,28 +660,47 @@ function ClusterSection({
 
 export interface ClusterModeProps {
   readonly board: CycleBoard
+  /**
+   * Whether the caller is the project's current facilitator, from their own
+   * member row (#19b). False while the members query loads or has failed.
+   * Only the facilitator gets controls; everyone else sees the same board
+   * read-only. The server enforces the rule; this only hides the controls.
+   */
+  readonly isFacilitator: boolean
   /** Called when a write says the caller is no longer a member. */
   readonly onLostAccess: () => void
+  /** Called when a write says the caller is not the facilitator. */
+  readonly onNotFacilitator: () => void
 }
 
 /**
  * The Cluster stage: the "New cluster" form, the ungrouped cards, and every
  * cluster with its Rename and Delete controls, and every card with its Move
- * menu and, on fine pointers, native drag (#18). Every member sees the same
- * controls. Cluster writes are not optimistic: they show when the board's
+ * menu and, on fine pointers, native drag (#18). Only the facilitator gets
+ * the controls (#19b); everyone else sees the same sections, names, counts,
+ * and cards with no control at all. Cluster writes are not optimistic: they show when the board's
  * refetch returns, and a refetch never overwrites a draft being typed. A card
  * move is the one optimistic write: the pending move is drawn over the server
  * board until the refetch after it is in.
  */
-export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
+export function ClusterMode({
+  board,
+  isFacilitator,
+  onLostAccess,
+  onNotFacilitator,
+}: ClusterModeProps) {
   const { cycleId } = board
   const finePointer = useFinePointer()
   const mover = useMoveCard(cycleId, (error) => {
-    const message = moveErrorMessage(clusterErrorCodeOf(error))
+    const code = clusterErrorCodeOf(error)
+    const message = moveErrorMessage(code)
     if (message === null) {
       onLostAccess()
     } else {
       toast.error(message)
+    }
+    if (code === 'not_project_facilitator') {
+      onNotFacilitator()
     }
   })
   // The server board with the pending move (if any) applied on top. The
@@ -709,6 +753,39 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
   const newInputRef = useRef<HTMLInputElement>(null)
   const newInputId = useId()
   const newErrorId = useId()
+
+  // The role the controls were last drawn for. When it is lost, every open
+  // form, draft, menu, and drag closes; a pending write is left to the
+  // server. Focus moves to the mode heading only if it was on a control that
+  // disappears. Gaining the role moves no focus.
+  const [shownRole, setShownRole] = useState(isFacilitator)
+  const [headingFocus, setHeadingFocus] = useState<object | null>(null)
+  if (shownRole !== isFacilitator) {
+    setShownRole(isFacilitator)
+    setFocusTarget(null)
+    setSuccessFocus(null)
+    setMoveFocus(null)
+    if (!isFacilitator) {
+      setOpenForm(null)
+      setNewDraft('')
+      setNewError(null)
+      setOpenMenu(null)
+      setDrag(null)
+      if (focusInClusterControls()) {
+        setHeadingFocus({})
+      }
+    }
+  }
+
+  useEffect(() => {
+    if (headingFocus === null) {
+      return
+    }
+    const active = document.activeElement
+    if (active === null || active === document.body) {
+      document.getElementById(MODE_HEADING_ID)?.focus()
+    }
+  }, [headingFocus])
 
   const formBusy =
     openForm !== null &&
@@ -943,7 +1020,8 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
     },
   }
 
-  const canDrag = finePointer && !mover.isPending && !clusterWritePending
+  const canDrag =
+    isFacilitator && finePointer && !mover.isPending && !clusterWritePending
 
   const renderCard = (
     card: BoardCard,
@@ -976,7 +1054,7 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
           setDrag(null)
         }}
         moveControl={
-          items.length === 0 ? null : (
+          !isFacilitator || items.length === 0 ? null : (
             <MoveMenu
               cardId={card.cardId}
               label={moveButtonLabel(card)}
@@ -1019,6 +1097,9 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
       onLostAccess()
     } else {
       toast.error(message)
+    }
+    if (code === 'not_project_facilitator') {
+      onNotFacilitator()
     }
     return code
   }
@@ -1289,36 +1370,38 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
       data-testid="cluster-board"
       className="min-w-0 space-y-4"
     >
-      <form
-        aria-label="New cluster"
-        noValidate
-        className="min-w-0 space-y-2"
-        onSubmit={submitNew}
-      >
-        <label htmlFor={newInputId} className="block text-sm font-medium">
-          Cluster name
-        </label>
-        <div className="flex min-w-0 flex-wrap items-start gap-2">
-          <input
-            ref={newInputRef}
-            id={newInputId}
-            type="text"
-            autoComplete="off"
-            value={newDraft}
-            aria-invalid={newError ? 'true' : undefined}
-            aria-describedby={newError ? newErrorId : undefined}
-            className={cn(inputClass, 'flex-1 basis-48')}
-            onChange={(event) => {
-              setNewDraft(event.target.value)
-              setNewError(null)
-            }}
-          />
-          <Button type="submit" disabled={createPending}>
-            {createPending ? 'Adding…' : 'Add cluster'}
-          </Button>
-        </div>
-        {newError ? <InlineError id={newErrorId} text={newError} /> : null}
-      </form>
+      {isFacilitator ? (
+        <form
+          aria-label="New cluster"
+          noValidate
+          className="min-w-0 space-y-2"
+          onSubmit={submitNew}
+        >
+          <label htmlFor={newInputId} className="block text-sm font-medium">
+            Cluster name
+          </label>
+          <div className="flex min-w-0 flex-wrap items-start gap-2">
+            <input
+              ref={newInputRef}
+              id={newInputId}
+              type="text"
+              autoComplete="off"
+              value={newDraft}
+              aria-invalid={newError ? 'true' : undefined}
+              aria-describedby={newError ? newErrorId : undefined}
+              className={cn(inputClass, 'flex-1 basis-48')}
+              onChange={(event) => {
+                setNewDraft(event.target.value)
+                setNewError(null)
+              }}
+            />
+            <Button type="submit" disabled={createPending}>
+              {createPending ? 'Adding…' : 'Add cluster'}
+            </Button>
+          </div>
+          {newError ? <InlineError id={newErrorId} text={newError} /> : null}
+        </form>
+      ) : null}
 
       <p
         role="status"
@@ -1331,12 +1414,14 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
 
       <section
         aria-labelledby="cluster-ungrouped-heading"
-        data-drop-target={UNGROUPED_TARGET}
+        data-drop-target={isFacilitator ? UNGROUPED_TARGET : undefined}
         className={cn(
           'min-w-0 space-y-3 rounded-lg border bg-card p-4 text-card-foreground',
-          drag?.over === UNGROUPED_TARGET && 'ring-2 ring-primary',
+          isFacilitator &&
+            drag?.over === UNGROUPED_TARGET &&
+            'ring-2 ring-primary',
         )}
-        {...dropHandlers}
+        {...(isFacilitator ? dropHandlers : {})}
       >
         <h3 id="cluster-ungrouped-heading" className="text-base font-semibold">
           Ungrouped ({ungrouped.length})
@@ -1359,7 +1444,9 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
 
       {clusters.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          No clusters yet. Add one above.
+          {isFacilitator
+            ? 'No clusters yet. Add one above.'
+            : 'No clusters yet.'}
         </p>
       ) : (
         <div className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -1373,6 +1460,7 @@ export function ClusterMode({ board, onLostAccess }: ClusterModeProps) {
             return (
               <ClusterSection
                 key={cluster.clusterId}
+                editable={isFacilitator}
                 cluster={cluster}
                 cards={cards}
                 renderCard={(card, index, selectControl) => {

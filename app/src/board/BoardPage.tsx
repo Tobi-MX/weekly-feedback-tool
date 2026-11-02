@@ -27,7 +27,11 @@ import {
   votingSummary,
 } from './boardModel'
 import { BoardCardList } from './BoardCards'
-import { CLUSTER_INTRO, ClusterMode } from './ClusterMode'
+import {
+  CLUSTER_INTRO,
+  CLUSTER_READ_ONLY_INTRO,
+  ClusterMode,
+} from './ClusterMode'
 import { StageIndicator } from './StageIndicator'
 import {
   BOARD_POLL_INTERVAL_MS,
@@ -124,6 +128,7 @@ interface ModeProps {
   readonly onAdvanced: (target: CycleStatus) => void
   readonly onAdvanceFailed: (code: CyclesErrorCode) => void
   readonly onLostAccess: () => void
+  readonly onNotFacilitator: () => void
 }
 
 const ADVANCE_TARGET: Record<AdvanceFromStatus, CycleStatus> = {
@@ -140,6 +145,7 @@ function BoardMode({
   onAdvanced,
   onAdvanceFailed,
   onLostAccess,
+  onNotFacilitator,
 }: ModeProps) {
   const { status, isRevealed, cards } = board
   let heading: string
@@ -174,7 +180,11 @@ function BoardMode({
       break
     case 'cluster':
       heading = 'Cluster'
-      intro = <p className="text-sm">{CLUSTER_INTRO}</p>
+      intro = (
+        <p className="text-sm">
+          {isFacilitator ? CLUSTER_INTRO : CLUSTER_READ_ONLY_INTRO}
+        </p>
+      )
       from = 'cluster'
       break
     case 'vote':
@@ -228,7 +238,12 @@ function BoardMode({
       ) : null}
       {/* Cards are shown only once revealed, never the caller's own before. */}
       {status === 'cluster' ? (
-        <ClusterMode board={board} onLostAccess={onLostAccess} />
+        <ClusterMode
+          board={board}
+          isFacilitator={isFacilitator}
+          onLostAccess={onLostAccess}
+          onNotFacilitator={onNotFacilitator}
+        />
       ) : isRevealed ? (
         <BoardCardList cards={cards} />
       ) : null}
@@ -294,9 +309,15 @@ function BoardScreen({ cycleId }: { cycleId: string }) {
 
   const projectId = !notFound && cycle ? cycle.projectId : undefined
   const membersQuery = useProjectMembersQuery(projectId)
-  // The control comes from the caller's own member row, never owner_id. While
+  // A cluster write refused with not_project_facilitator (#19b) hides every
+  // facilitator control at once, until the members re-read it starts has
+  // finished; then the controls follow its answer. The value is that
+  // re-read's token, or null.
+  const [refusedRead, setRefusedRead] = useState<object | null>(null)
+  // The controls come from the caller's own member row, never owner_id. While
   // the members query is loading or has failed, no control is shown.
   const isFacilitator =
+    refusedRead === null &&
     membersQuery.isSuccess &&
     membersQuery.data?.some(
       (member) => member.isMe && member.role === 'facilitator',
@@ -322,6 +343,23 @@ function BoardScreen({ cycleId }: { cycleId: string }) {
         queryKey: projectMembersQueryKey(userId, projectId),
       })
     }
+  }, [queryClient, userId, projectId])
+
+  // The server refused a cluster write: the caller is not the facilitator
+  // (any more). Hide the controls now and re-read the members once.
+  const onNotFacilitator = useCallback(() => {
+    if (projectId === undefined) {
+      return
+    }
+    const token = {}
+    setRefusedRead(token)
+    void queryClient
+      .invalidateQueries({
+        queryKey: projectMembersQueryKey(userId, projectId),
+      })
+      .finally(() => {
+        setRefusedRead((current) => (current === token ? null : current))
+      })
   }, [queryClient, userId, projectId])
 
   // One channel while the cycle is open and the caller has access. A closed
@@ -456,6 +494,7 @@ function BoardScreen({ cycleId }: { cycleId: string }) {
           onAdvanced={onAdvanced}
           onAdvanceFailed={onAdvanceFailed}
           onLostAccess={loseAccess}
+          onNotFacilitator={onNotFacilitator}
         />
       </>
     )
