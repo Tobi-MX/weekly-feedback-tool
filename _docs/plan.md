@@ -28,7 +28,7 @@ Before the retrospective, contributors can see and edit only their own feedback.
 
 The facilitator starts the retrospective and reveals all submissions at once.
 
-The tool suggests thematic clusters automatically. The team can then:
+The tool suggests thematic clusters automatically. The facilitator then organizes them while the team watches the board live:
 
 - Move cards between clusters
 - Merge or split clusters
@@ -115,7 +115,7 @@ The facilitator reviews and confirms these suggestions before they are saved.
 
 ### Automatic clustering is always editable
 
-**Decision:** AI proposes clusters but never finalizes them.
+**Decision:** AI proposes clusters but never finalizes them; the facilitator edits the draft.
 
 **Why:** Similar wording does not always mean the same underlying problem. The team understands its context better than the model.
 
@@ -199,7 +199,7 @@ Can:
 
 - Submit and edit their own feedback
 - Choose attribution or anonymity
-- Participate in clustering
+- Follow clustering live on the board
 - Vote
 - View completed retrospective summaries
 - Update actions assigned to them
@@ -212,6 +212,7 @@ Can also:
 - Start the retrospective
 - Reveal feedback
 - Control the retrospective stages
+- Organize the clusters: create, rename, delete, merge, split, and move cards
 - Upload meeting records
 - Review extracted outcomes
 - Edit and publish the final summary
@@ -244,7 +245,7 @@ The MVP is successful when a team can:
 
 1. Create a project and weekly feedback cycle
 2. Collect private Start, Stop, and Continue cards
-3. Reveal and collaboratively cluster the cards
+3. Reveal the cards; the facilitator clusters them while the team watches
 4. Vote with three stackable votes per person
 5. Discuss topics in priority order
 6. Upload a meeting recording or transcript
