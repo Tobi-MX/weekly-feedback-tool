@@ -8,6 +8,7 @@ import { expectPgError, expectRows, type DbResult } from './assertions'
 import {
   anonClient,
   createRoleCast,
+  makeFacilitator,
   projectWithRoles,
   unknownId,
   type RoleCast,
@@ -289,6 +290,8 @@ describe('merge_clusters and split_cluster', () => {
       { p_cycle_id: cycle.id, p_from_status: 'reveal' },
     )
     expect(expectRows(advanced, 1)[0].status).toBe('cluster')
+    // Since #19b only the facilitator edits clusters: member A takes the role.
+    await makeFacilitator(roles.project, roles.owner, roles.memberA)
     const first = await cluster(roles.memberA, cycle.id, 'First')
     const second = await cluster(roles.memberA, cycle.id, 'Second')
     await moved(roles.memberA, cardIds[0], first)
@@ -310,7 +313,7 @@ describe('merge_clusters and split_cluster', () => {
     return current.clusters.flatMap((entry) => entry.card_ids)
   }
 
-  it('member A clusters, member B splits two cards out, the owner merges them back', async () => {
+  it('member A, as facilitator, clusters, splits two cards out, and merges them back', async () => {
     const { owner, memberA, memberB, cycleId, cardIds, first } =
       await clustering()
     // First = [0, 1]; add card 2 to it, so it has three.
@@ -322,7 +325,7 @@ describe('merge_clusters and split_cluster', () => {
     ])
 
     const split = await splitCluster(
-      memberB,
+      memberA,
       first,
       [cardIds[2], cardIds[0]],
       '  Tools  ',
@@ -338,7 +341,7 @@ describe('merge_clusters and split_cluster', () => {
     expect(cardsOf(afterSplit, first)).toEqual([cardIds[1]])
     expect(afterSplit.clusters.at(-1)?.cluster_id).toBe(created.cluster_id)
 
-    const merged = await mergeClusters(owner, created.cluster_id, first)
+    const merged = await mergeClusters(memberA, created.cluster_id, first)
     const [target] = expectRows(merged, 1)
     expect(target).toEqual({
       cluster_id: first,
@@ -435,12 +438,11 @@ describe('merge_clusters and split_cluster', () => {
   })
 
   it('opposite merges at the same moment: exactly one succeeds and every card ends in one cluster', async () => {
-    const { memberA, memberB, cycleId, cardIds, first, second } =
-      await clustering()
+    const { memberA, cycleId, cardIds, first, second } = await clustering()
 
     const [one, two] = await Promise.all([
       mergeClusters(memberA, first, second),
-      mergeClusters(memberB, second, first),
+      mergeClusters(memberA, second, first),
     ])
     const outcomes = [one, two]
     expect(outcomes.filter((result) => result.error === null)).toHaveLength(1)
@@ -466,7 +468,7 @@ describe('merge_clusters and split_cluster', () => {
     await moved(memberA, cardIds[2], first)
 
     const [split, move] = await Promise.all([
-      splitCluster(memberB, first, [cardIds[0], cardIds[1]], 'Raced'),
+      splitCluster(memberA, first, [cardIds[0], cardIds[1]], 'Raced'),
       moveCard(memberA, cardIds[0], second),
     ])
     expect(move.error).toBeNull()
@@ -482,7 +484,7 @@ describe('merge_clusters and split_cluster', () => {
     expect(cardsOf(after, second)).toContain(cardIds[0])
   })
 
-  it('Realtime delivers clusters_changed with no actor to member B after member A merges and splits', async () => {
+  it('Realtime delivers clusters_changed with no actor to member B after member A, as facilitator, merges and splits', async () => {
     const { memberA, memberB, cycleId, cardIds, first, second } =
       await clustering()
     const messages: RealtimePostgresInsertPayload<CycleEventRow>[] = []

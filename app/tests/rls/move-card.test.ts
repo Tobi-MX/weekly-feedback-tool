@@ -277,18 +277,18 @@ describe('move_card', () => {
       .map((entry) => entry.cluster_id)
   }
 
-  it('member A moves a card into a cluster, member B to another, then to Ungrouped', async () => {
+  it('the owner, as facilitator, moves a card into a cluster, to another, then to Ungrouped', async () => {
     const { memberA, memberB, owner, cycleId, cardIds, first, second } =
       await clustering()
     const [card] = cardIds
 
-    await moved(memberA, card, first)
+    await moved(owner, card, first)
     expect(clusterOf(await board(memberB, cycleId), card)).toEqual([first])
 
-    await moved(memberB, card, second, 0)
-    expect(clusterOf(await board(owner, cycleId), card)).toEqual([second])
+    await moved(owner, card, second, 0)
+    expect(clusterOf(await board(memberB, cycleId), card)).toEqual([second])
 
-    await moved(memberB, card, null)
+    await moved(owner, card, null)
     const after = await board(memberA, cycleId)
     expect(clusterOf(after, card)).toEqual([])
     expect(after.cards.map((entry) => entry.card_id)).toContain(card)
@@ -352,18 +352,13 @@ describe('move_card', () => {
   })
 
   it('concurrent moves of one card all succeed and leave it in exactly one cluster', async () => {
-    const { memberA, memberB, cycleId, cardIds, first, second } =
+    const { owner, memberA, cycleId, cardIds, first, second } =
       await clustering()
     const [card] = cardIds
 
     const results = await Promise.all(
       Array.from({ length: 10 }, (_unused, index) =>
-        moveCard(
-          index % 2 === 0 ? memberA : memberB,
-          card,
-          index % 3 === 0 ? first : second,
-          null,
-        ),
+        moveCard(owner, card, index % 3 === 0 ? first : second, null),
       ),
     )
     for (const result of results) {
@@ -373,12 +368,10 @@ describe('move_card', () => {
   })
 
   it('five cards moved concurrently into one cluster all land once', async () => {
-    const { memberA, memberB, cycleId, cardIds, first } = await clustering(5)
+    const { owner, memberB, cycleId, cardIds, first } = await clustering(5)
 
     const results = await Promise.all(
-      cardIds.map((card, index) =>
-        moveCard(index % 2 === 0 ? memberA : memberB, card, first, 0),
-      ),
+      cardIds.map((card) => moveCard(owner, card, first, 0)),
     )
     for (const result of results) {
       expect(result.error).toBeNull()
@@ -390,8 +383,8 @@ describe('move_card', () => {
     expect([...listed].sort()).toEqual([...cardIds].sort())
   })
 
-  it('Realtime delivers clusters_changed with no actor to member B after member A moves a card', async () => {
-    const { memberA, memberB, cycleId, cardIds, first } = await clustering()
+  it('Realtime delivers clusters_changed with no actor to member B after the facilitator moves a card', async () => {
+    const { owner, memberB, cycleId, cardIds, first } = await clustering()
     const messages: RealtimePostgresInsertPayload<CycleEventRow>[] = []
     let channel: RealtimeChannel | null = null
     let resolveEvent: () => void = () => undefined
@@ -452,7 +445,7 @@ describe('move_card', () => {
         resolveEvent = resolve
       })
 
-      await moved(memberA, cardIds[0], first)
+      await moved(owner, cardIds[0], first)
       await withTimeout(
         event,
         EVENT_TIMEOUT_MS,
