@@ -15,8 +15,14 @@ vi.mock('../auth/supabaseClient', () => ({
   },
 }))
 
-const { createCluster, renameCluster, deleteCluster, moveCard } =
-  await vi.importActual<typeof import('./clustersApi')>('./clustersApi')
+const {
+  createCluster,
+  renameCluster,
+  deleteCluster,
+  moveCard,
+  mergeClusters,
+  splitCluster,
+} = await vi.importActual<typeof import('./clustersApi')>('./clustersApi')
 
 interface DbResult {
   readonly data: unknown
@@ -48,12 +54,17 @@ async function captureError(promise: Promise<unknown>): Promise<unknown> {
 
 const CARD_ID = 'a0000000-0000-4000-8000-000000000001'
 
-/** The four calls, each with the arguments the tests use. */
+const OTHER_CLUSTER_ID = 'c1000000-0000-4000-8000-000000000002'
+const OTHER_CARD_ID = 'a0000000-0000-4000-8000-000000000002'
+
+/** Every call, each with the arguments the tests use. */
 const CALLS = [
   ['createCluster', () => createCluster(CYCLE_ID, 'Process')],
   ['renameCluster', () => renameCluster(CLUSTER_ID, 'Process')],
   ['deleteCluster', () => deleteCluster(CLUSTER_ID)],
   ['moveCard', () => moveCard(CARD_ID, CLUSTER_ID, 2)],
+  ['mergeClusters', () => mergeClusters(OTHER_CLUSTER_ID, CLUSTER_ID)],
+  ['splitCluster', () => splitCluster(CLUSTER_ID, [CARD_ID], 'Tools')],
 ] as const
 
 beforeEach(() => {
@@ -127,6 +138,56 @@ describe('clustersApi', () => {
     expect(fake.from).not.toHaveBeenCalled()
   })
 
+  it('mergeClusters calls merge_clusters once with { p_source_cluster_id, p_target_cluster_id } and parses the target', async () => {
+    const fake = createClientMock({ data: [row], error: null })
+
+    await expect(
+      mergeClusters(OTHER_CLUSTER_ID, CLUSTER_ID),
+    ).resolves.toStrictEqual({
+      clusterId: CLUSTER_ID,
+      name: 'Process',
+      source: 'manual',
+    })
+    expect(fake.rpc.mock.calls).toStrictEqual([
+      [
+        'merge_clusters',
+        {
+          p_source_cluster_id: OTHER_CLUSTER_ID,
+          p_target_cluster_id: CLUSTER_ID,
+        },
+      ],
+    ])
+    expect(fake.from).not.toHaveBeenCalled()
+  })
+
+  it('splitCluster calls split_cluster once with { p_cluster_id, p_card_ids, p_name } and parses the new cluster', async () => {
+    const created = {
+      cluster_id: OTHER_CLUSTER_ID,
+      name: 'Tools',
+      source: 'manual',
+    }
+    const fake = createClientMock({ data: [created], error: null })
+
+    await expect(
+      splitCluster(CLUSTER_ID, [OTHER_CARD_ID, CARD_ID], '  Tools '),
+    ).resolves.toStrictEqual({
+      clusterId: OTHER_CLUSTER_ID,
+      name: 'Tools',
+      source: 'manual',
+    })
+    expect(fake.rpc.mock.calls).toStrictEqual([
+      [
+        'split_cluster',
+        {
+          p_cluster_id: CLUSTER_ID,
+          p_card_ids: [OTHER_CARD_ID, CARD_ID],
+          p_name: '  Tools ',
+        },
+      ],
+    ])
+    expect(fake.from).not.toHaveBeenCalled()
+  })
+
   it.each<[string, unknown]>([
     ['no row', []],
     ['two rows', [row, row]],
@@ -136,18 +197,23 @@ describe('clustersApi', () => {
     ['a missing source', [{ cluster_id: CLUSTER_ID, name: 'Process' }]],
     ['an unknown source', [{ ...row, source: 'robot' }]],
     ['a non-UUID id', [{ ...row, cluster_id: 'cluster-1' }]],
-  ])('a create or rename row with %s is unknown', async (_label, data) => {
-    createClientMock({ data, error: null })
+  ])(
+    'a create, rename, merge or split row with %s is unknown',
+    async (_label, data) => {
+      createClientMock({ data, error: null })
 
-    for (const promise of [
-      createCluster(CYCLE_ID, 'Process'),
-      renameCluster(CLUSTER_ID, 'Process'),
-    ]) {
-      const error = await captureError(promise)
-      expect(error).toBeInstanceOf(ClustersApiError)
-      expect(clusterErrorCodeOf(error)).toBe('unknown')
-    }
-  })
+      for (const promise of [
+        createCluster(CYCLE_ID, 'Process'),
+        renameCluster(CLUSTER_ID, 'Process'),
+        mergeClusters(OTHER_CLUSTER_ID, CLUSTER_ID),
+        splitCluster(CLUSTER_ID, [CARD_ID], 'Tools'),
+      ]) {
+        const error = await captureError(promise)
+        expect(error).toBeInstanceOf(ClustersApiError)
+        expect(clusterErrorCodeOf(error)).toBe('unknown')
+      }
+    },
+  )
 
   it.each<[string, string, ClusterErrorCode]>([
     ['42501', 'not_project_member', 'not_project_member'],
@@ -158,6 +224,11 @@ describe('clustersApi', () => {
     ['P0001', 'cluster_limit_reached', 'cluster_limit_reached'],
     ['P0001', 'card_not_found', 'card_not_found'],
     ['P0001', 'invalid_card_position', 'invalid_card_position'],
+    ['P0001', 'cannot_merge_into_self', 'cannot_merge_into_self'],
+    ['P0001', 'invalid_card_selection', 'invalid_card_selection'],
+    ['P0001', 'card_not_in_cluster', 'card_not_in_cluster'],
+    ['P0001', 'split_takes_all_cards', 'split_takes_all_cards'],
+    ['P0001', 'cluster_not_found: d1000000', 'unknown'],
     ['42501', 'permission denied for function create_cluster', 'unknown'],
     [
       '23505',
@@ -166,7 +237,7 @@ describe('clustersApi', () => {
     ],
     ['PGRST202', 'Could not find the function', 'unknown'],
   ])(
-    'maps %s %s to %s for all four calls without keeping or logging the raw text',
+    'maps %s %s to %s for every call without keeping or logging the raw text',
     async (code, message, expected) => {
       createClientMock({ data: null, error: { code, message } })
 
@@ -215,6 +286,37 @@ describe('clustersApi', () => {
     )
     expect(clusterErrorMessage('unknown', 'delete')).toBe(
       'Could not delete the cluster.',
+    )
+  })
+
+  it('holds the merge and split copy next to the cluster copy', () => {
+    expect(clusterErrorMessage('cannot_merge_into_self', 'merge')).toBe(
+      'Choose a different cluster to merge into.',
+    )
+    expect(clusterErrorMessage('invalid_card_selection', 'split')).toBe(
+      'Select the cards to move to the new cluster.',
+    )
+    expect(clusterErrorMessage('card_not_in_cluster', 'split')).toBe(
+      'Some selected cards are no longer in this cluster. Check your selection and try again.',
+    )
+    expect(clusterErrorMessage('split_takes_all_cards', 'split')).toBe(
+      'Leave at least one card in the cluster. To rename it, use Rename.',
+    )
+    expect(clusterErrorMessage('cluster_not_found', 'merge')).toBe(
+      'This cluster no longer exists.',
+    )
+    expect(clusterErrorMessage('cluster_limit_reached', 'split')).toBe(
+      'This cycle already has 50 clusters.',
+    )
+    expect(clusterErrorMessage('not_project_member', 'split')).toBeNull()
+    expect(clusterErrorMessage('unknown', 'merge')).toBe(
+      'Could not merge the clusters.',
+    )
+    expect(clusterErrorMessage('unknown', 'split')).toBe(
+      'Could not split the cluster.',
+    )
+    expect(clusterErrorMessage('unknown', 'save')).toBe(
+      'Could not save the cluster.',
     )
   })
 

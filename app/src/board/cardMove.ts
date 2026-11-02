@@ -172,14 +172,20 @@ export function moveMenuItems(
 
 const LABEL_LIMIT = 40
 
+/**
+ * A card's text for an accessible name: cut to 40 characters (code points)
+ * plus "…". Only the text, never an author.
+ */
+export function cardLabelText(card: BoardCard): string {
+  const characters = [...card.text]
+  return characters.length > LABEL_LIMIT
+    ? `${characters.slice(0, LABEL_LIMIT).join('')}…`
+    : card.text
+}
+
 /** The Move button's accessible name: the card text cut to 40 characters. */
 export function moveButtonLabel(card: BoardCard): string {
-  const characters = [...card.text]
-  const text =
-    characters.length > LABEL_LIMIT
-      ? `${characters.slice(0, LABEL_LIMIT).join('')}…`
-      : card.text
-  return `Move card: ${text}`
+  return `Move card: ${cardLabelText(card)}`
 }
 
 /** What the status region says after a successful move. */

@@ -7,8 +7,10 @@ import type { CardMove } from './cardMove'
 import {
   createCluster,
   deleteCluster,
+  mergeClusters,
   moveCard,
   renameCluster,
+  splitCluster,
 } from './clustersApi'
 
 /**
@@ -53,6 +55,52 @@ export function useDeleteCluster(cycleId: string) {
   const invalidate = useInvalidateBoard(cycleId)
   return useMutation({
     mutationFn: (clusterId: string) => deleteCluster(clusterId),
+    onSettled: invalidate,
+  })
+}
+
+/**
+ * Re-reads the board after a merge or split and returns that promise, so the
+ * mutation settles only once the refetched board is in and the cluster that
+ * focus should go to is rendered.
+ */
+function useAwaitedBoardInvalidation(cycleId: string) {
+  const queryClient = useQueryClient()
+  const { user } = useAuth()
+  const userId = user?.id ?? null
+  return () =>
+    queryClient.invalidateQueries({
+      queryKey: cycleBoardQueryKey(userId, cycleId),
+    })
+}
+
+export interface MergeClustersInput {
+  readonly sourceClusterId: string
+  readonly targetClusterId: string
+}
+
+/** Merge (#19): not optimistic; the board shows it after the refetch. */
+export function useMergeClusters(cycleId: string) {
+  const invalidate = useAwaitedBoardInvalidation(cycleId)
+  return useMutation({
+    mutationFn: ({ sourceClusterId, targetClusterId }: MergeClustersInput) =>
+      mergeClusters(sourceClusterId, targetClusterId),
+    onSettled: invalidate,
+  })
+}
+
+export interface SplitClusterInput {
+  readonly clusterId: string
+  readonly cardIds: readonly string[]
+  readonly name: string
+}
+
+/** Split (#19): not optimistic; the board shows it after the refetch. */
+export function useSplitCluster(cycleId: string) {
+  const invalidate = useAwaitedBoardInvalidation(cycleId)
+  return useMutation({
+    mutationFn: ({ clusterId, cardIds, name }: SplitClusterInput) =>
+      splitCluster(clusterId, cardIds, name),
     onSettled: invalidate,
   })
 }
