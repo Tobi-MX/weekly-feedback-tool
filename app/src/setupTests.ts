@@ -3,6 +3,7 @@ import { cleanup } from '@testing-library/react'
 import { toast } from 'sonner'
 import { afterEach, beforeEach, vi } from 'vitest'
 import { queryClient } from './lib/queryClient'
+import { resetAiClusteringMock } from './test/aiClusteringMock'
 import { resetAuthMock } from './test/authMock'
 import { resetBoardMock } from './test/boardMock'
 import { resetCardsMock } from './test/cardsMock'
@@ -66,6 +67,13 @@ vi.mock('./board/clustersApi', async () => {
   return mock
 })
 
+// The AI clustering calls (#21) use the same pattern, so no test reaches the
+// cluster-feedback Edge Function or accept_ai_clusters.
+vi.mock('./board/aiClusteringApi', async () => {
+  const { aiClusteringMock: mock } = await import('./test/aiClusteringMock')
+  return mock
+})
+
 // jsdom lacks a few browser APIs that Radix and sonner feature-detect.
 if (typeof globalThis.ResizeObserver === 'undefined') {
   globalThis.ResizeObserver = class ResizeObserver {
@@ -106,6 +114,7 @@ beforeEach(() => {
   resetCyclesMock()
   resetCardsMock()
   resetBoardMock()
+  resetAiClusteringMock()
   // Sonner keeps its toast queue outside React, so dismiss it between tests.
   toast.dismiss()
   // The QueryClient is a singleton in the app; reset it between tests so one

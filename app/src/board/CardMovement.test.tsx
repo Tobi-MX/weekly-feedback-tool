@@ -440,7 +440,14 @@ describe('optimistic moves', () => {
     await waitFor(() => {
       expect(textsIn(/^Tools/)).toEqual(['Start pairing'])
     })
-    expect(headings()).toEqual(['Ungrouped (1)', 'Process (3)', 'Tools (1)'])
+    // Tools is an AI cluster: its badge stays until the refetch shows it
+    // manual (#21). The facilitator's AI suggestions panel comes first.
+    expect(headings()).toEqual([
+      'AI suggestions',
+      'Ungrouped (1)',
+      'Process (3)',
+      'Tools (1) AI suggestion',
+    ])
     expect(textsIn(/^Ungrouped/)).toEqual(['Continue demos'])
     expect(boardMock.moveCard).toHaveBeenCalledTimes(1)
 
