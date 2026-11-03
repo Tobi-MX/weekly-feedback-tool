@@ -417,7 +417,9 @@ describe('cluster mode layout', () => {
     ).toBeInTheDocument()
   })
 
-  it.each(['reveal', 'vote', 'discuss', 'closed'] as const)(
+  // Vote mode (#23) replaces the flat card list; VoteMode.test.tsx checks it
+  // has no cluster form, Rename, or Delete.
+  it.each(['reveal', 'discuss', 'closed'] as const)(
     'in %s there is no cluster form, Rename, or Delete, and the card list is unchanged',
     async (status) => {
       setup({ board: boardOf(status) })

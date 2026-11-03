@@ -2,8 +2,49 @@ import type { DragEvent, ReactNode } from 'react'
 import { wrapText } from '@/cards/CardForms'
 import { CARD_CATEGORIES, cardCategoryLabel } from '@/cards/cardCategories'
 import { cn } from '@/lib/utils'
-import type { BoardCard } from './boardApi'
+import type { BoardCard, BoardCluster } from './boardApi'
 import { boardCardLabel } from './boardModel'
+
+/**
+ * Wraps a 100-character name with no spaces anywhere instead of overflowing
+ * a 375 px screen. No `break-words`, which would win over it.
+ */
+export const wrapAnywhere = 'min-w-0 [overflow-wrap:anywhere]'
+
+export interface ClusterHeadingProps {
+  readonly id: string
+  readonly cluster: BoardCluster
+  readonly cardCount: number
+}
+
+/**
+ * A cluster's `h3` in cluster and vote mode: its name and card count, and
+ * the **AI suggestion** badge when `source` is `ai`.
+ */
+export function ClusterHeading({
+  id,
+  cluster,
+  cardCount,
+}: ClusterHeadingProps) {
+  return (
+    <h3
+      id={id}
+      className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 text-base font-semibold"
+    >
+      <span data-cluster-name="" className={wrapAnywhere}>
+        {cluster.name} ({cardCount})
+      </span>
+      {cluster.source === 'ai' ? (
+        <>
+          {' '}
+          <span className="rounded-md border px-1.5 py-0.5 text-xs font-medium whitespace-nowrap">
+            AI suggestion
+          </span>
+        </>
+      ) : null}
+    </h3>
+  )
+}
 
 /**
  * One card: its text and its label, both as text. Nothing else is rendered,

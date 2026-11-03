@@ -22,7 +22,7 @@ import {
   keptAnnouncement,
 } from './AiSuggestions'
 import type { BoardCard, BoardCluster, CycleBoard } from './boardApi'
-import { ClusterCardItem } from './BoardCards'
+import { ClusterCardItem, ClusterHeading, wrapAnywhere } from './BoardCards'
 import { ungroupedCards } from './boardModel'
 import {
   applyPendingMove,
@@ -88,12 +88,6 @@ const inputClass = cn(
   'block h-9 w-full min-w-0 rounded-md border border-input bg-background px-3 py-1 text-sm aria-invalid:border-destructive',
   focusRing,
 )
-
-/**
- * Wraps a 100-character name with no spaces anywhere instead of overflowing
- * a 375 px screen. No `break-words`, which would win over it.
- */
-const wrapAnywhere = 'min-w-0 [overflow-wrap:anywhere]'
 
 const selectClass = cn(
   'block h-9 w-full max-w-full min-w-0 truncate rounded-md border border-input bg-background px-3 py-1 text-sm',
@@ -441,22 +435,11 @@ function ClusterSection({
     )
   } else {
     header = (
-      <h3
+      <ClusterHeading
         id={headingId}
-        className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 text-base font-semibold"
-      >
-        <span data-cluster-name="" className={wrapAnywhere}>
-          {name} ({cards.length})
-        </span>
-        {cluster.source === 'ai' ? (
-          <>
-            {' '}
-            <span className="rounded-md border px-1.5 py-0.5 text-xs font-medium whitespace-nowrap">
-              AI suggestion
-            </span>
-          </>
-        ) : null}
-      </h3>
+        cluster={cluster}
+        cardCount={cards.length}
+      />
     )
   }
 
