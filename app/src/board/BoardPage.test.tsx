@@ -12,7 +12,7 @@ import {
   mockEmptySession,
   mockRestoredSession,
 } from '../test/authMock'
-import { boardMock } from '../test/boardMock'
+import { boardMock, NO_VOTES } from '../test/boardMock'
 import { cyclesMock } from '../test/cyclesMock'
 import { membersMock } from '../test/membersMock'
 import { profileMock } from '../test/profileMock'
@@ -107,7 +107,14 @@ function boardOf(
   isRevealed = status !== 'collecting',
   cards: readonly BoardCard[] = SIX_CARDS,
 ): CycleBoard {
-  return { cycleId: CYCLE_ID, status, isRevealed, cards, clusters: [] }
+  return {
+    cycleId: CYCLE_ID,
+    status,
+    isRevealed,
+    cards,
+    clusters: [],
+    ...NO_VOTES,
+  }
 }
 
 function memberRow(overrides: Partial<ProjectMember>): ProjectMember {

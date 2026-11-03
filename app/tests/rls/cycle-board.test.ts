@@ -49,6 +49,11 @@ interface CycleBoard {
   readonly is_revealed: boolean
   readonly cards: readonly BoardCard[]
   readonly clusters: readonly BoardCluster[]
+  readonly my_votes: readonly {
+    readonly cluster_id: string
+    readonly vote_count: number
+  }[]
+  readonly votes_remaining: number
 }
 
 /** One row of `get_cycle_status` (only the columns this file reads). */
@@ -86,7 +91,15 @@ interface ClosedCycleRow {
 /** Who made a call: a signed-in test user or the signed-out anon client. */
 type Caller = TestUser | 'anon'
 
-const BOARD_KEYS = ['cards', 'clusters', 'cycle_id', 'is_revealed', 'status']
+const BOARD_KEYS = [
+  'cards',
+  'clusters',
+  'cycle_id',
+  'is_revealed',
+  'my_votes',
+  'status',
+  'votes_remaining',
+]
 const ATTRIBUTED_KEYS = [
   'author_display_name',
   'card_id',

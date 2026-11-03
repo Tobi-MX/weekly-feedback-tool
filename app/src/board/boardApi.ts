@@ -41,8 +41,23 @@ export interface BoardCluster {
 }
 
 /**
+ * One of the caller's own votes, per cluster: `voteCount` is 1 to 3. Vote
+ * totals are never on the board (#22); they come only from `get_vote_totals`
+ * once voting has closed.
+ */
+export interface MyVote {
+  readonly clusterId: string
+  readonly voteCount: number
+}
+
+/** Each member has exactly this many votes per cycle (#22). */
+export const VOTES_PER_MEMBER = 3
+
+/**
  * One `get_cycle_board` response. `cards` and `clusters` keep the server's
- * order. A card in no cluster's `cardIds` is ungrouped.
+ * order. A card in no cluster's `cardIds` is ungrouped. `myVotes` (in
+ * cluster order) and `votesRemaining` describe only the caller's own votes;
+ * together they always add up to `VOTES_PER_MEMBER`.
  */
 export interface CycleBoard {
   readonly cycleId: string
@@ -50,6 +65,8 @@ export interface CycleBoard {
   readonly isRevealed: boolean
   readonly cards: readonly BoardCard[]
   readonly clusters: readonly BoardCluster[]
+  readonly myVotes: readonly MyVote[]
+  readonly votesRemaining: number
 }
 
 // Strict: an extra or a missing key fails to parse, so a response that
@@ -86,6 +103,14 @@ const clusterSchema = z
   })
   .strict()
 
+// #22: the caller's own votes on one cluster, exactly two keys.
+const myVoteSchema = z
+  .object({
+    cluster_id: z.uuid(),
+    vote_count: z.number().int().min(1).max(VOTES_PER_MEMBER),
+  })
+  .strict()
+
 const cycleBoardSchema = z
   .object({
     cycle_id: z.string(),
@@ -98,6 +123,8 @@ const cycleBoardSchema = z
       ]),
     ),
     clusters: z.array(clusterSchema),
+    my_votes: z.array(myVoteSchema),
+    votes_remaining: z.number().int().min(0).max(VOTES_PER_MEMBER),
   })
   .strict()
   .refine((board) => {
@@ -114,6 +141,21 @@ const cycleBoardSchema = z
       }
     }
     return true
+  })
+  .refine((board) => {
+    // Every own vote is on a cluster of this response, no cluster appears
+    // twice, and the votes plus the remaining count are exactly the budget.
+    const clusterIds = new Set(board.clusters.map((c) => c.cluster_id))
+    const seen = new Set<string>()
+    let used = 0
+    for (const vote of board.my_votes) {
+      if (!clusterIds.has(vote.cluster_id) || seen.has(vote.cluster_id)) {
+        return false
+      }
+      seen.add(vote.cluster_id)
+      used += vote.vote_count
+    }
+    return used + board.votes_remaining === VOTES_PER_MEMBER
   })
 
 type CardRow = z.infer<typeof cycleBoardSchema>['cards'][number]
@@ -180,5 +222,10 @@ export async function fetchCycleBoard(
       source: cluster.source,
       cardIds: cluster.card_ids,
     })),
+    myVotes: row.my_votes.map((vote) => ({
+      clusterId: vote.cluster_id,
+      voteCount: vote.vote_count,
+    })),
+    votesRemaining: row.votes_remaining,
   }
 }

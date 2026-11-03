@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { BoardCard, BoardCluster, CycleBoard } from './boardApi'
+import { NO_VOTES } from '../test/boardMock'
 import {
   applyPendingMove,
   cardLocation,
@@ -32,6 +33,7 @@ const BOARD: CycleBoard = {
     cluster('X', 'Process', ['a', 'b', 'c']),
     cluster('Y', 'Tools', ['d']),
   ],
+  ...NO_VOTES,
 }
 
 function ids(board: CycleBoard, clusterId: string): readonly string[] {
