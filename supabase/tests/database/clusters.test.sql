@@ -532,7 +532,7 @@ values ('47000000-0000-4000-8000-000000000002', '37000000-0000-4000-8000-0000000
 -- ---------------------------------------------------------------------------
 -- Tables: columns, constraints, guards, and cascades.
 -- ---------------------------------------------------------------------------
-select columns_are('public', 'clusters', array['id', 'cycle_id', 'name', 'source', 'sort_order', 'created_at', 'updated_at'], 'clusters has exactly the seven expected columns');
+select columns_are('public', 'clusters', array['id', 'cycle_id', 'name', 'source', 'sort_order', 'created_at', 'updated_at', 'discussion_status'], 'clusters has exactly the eight expected columns (#25 adds discussion_status)');
 select columns_are('public', 'cluster_cards', array['cycle_id', 'cluster_id', 'card_id', 'sort_order'], 'cluster_cards has exactly the four expected columns');
 select is(
   (select array_agg(c.column_name || ':' || c.data_type || ':' || c.is_nullable || ':' || coalesce(c.column_default, '') order by c.ordinal_position) from information_schema.columns c where c.table_schema = 'public' and c.table_name = 'clusters'),
@@ -543,7 +543,8 @@ select is(
     'source:text:NO:''manual''::text',
     'sort_order:integer:NO:',
     'created_at:timestamp with time zone:NO:now()',
-    'updated_at:timestamp with time zone:NO:now()'
+    'updated_at:timestamp with time zone:NO:now()',
+    'discussion_status:text:NO:''pending''::text'
   ],
   'clusters column types, defaults, and not-null rules'
 );

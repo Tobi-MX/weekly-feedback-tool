@@ -623,14 +623,15 @@ reset role;
 -- ---------------------------------------------------------------------------
 select is((select md5(prosrc) from pg_proc where oid = 'public.get_cycle_board(uuid)'::regprocedure), 'a652b8eee54255a3b19a6448c77fc9ee', 'get_cycle_board is unchanged');
 select is(
-  -- votes is added by #22's later migration, not by this one.
-  (select string_agg(table_name, ',' order by table_name) from information_schema.tables where table_schema = 'public' and table_name <> 'votes'),
+  -- votes and notes are added by #22's and #25's later migrations, not by this one.
+  (select string_agg(table_name, ',' order by table_name) from information_schema.tables where table_schema = 'public' and table_name not in ('votes', 'notes')),
   'ai_runs,card_authors,cards,cluster_cards,clusters,cycle_events,feedback_cycles,profiles,project_invites,project_members,projects',
   'no table is added to public'
 );
 select is(
-  (select md5(string_agg(table_name || '.' || column_name || ':' || data_type, ',' order by table_name, ordinal_position)) from information_schema.columns where table_schema = 'public' and table_name <> 'votes'),
-  'f727772622900c188bd798812baf45d5',
+  (select md5(string_agg(table_name || '.' || column_name || ':' || data_type, ',' order by table_name, ordinal_position)) from information_schema.columns where table_schema = 'public' and table_name not in ('votes', 'notes')),
+  -- #25 adds clusters.discussion_status.
+  '1bf608da976bcab02e587b776591308d',
   'no column is added or changed in public'
 );
 select is(
