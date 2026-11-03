@@ -3,6 +3,7 @@ import { cleanup } from '@testing-library/react'
 import { toast } from 'sonner'
 import { afterEach, beforeEach, vi } from 'vitest'
 import { queryClient } from './lib/queryClient'
+import { resetActionsMock } from './test/actionsMock'
 import { resetAiClusteringMock } from './test/aiClusteringMock'
 import { resetAuthMock } from './test/authMock'
 import { resetBoardMock } from './test/boardMock'
@@ -107,6 +108,22 @@ vi.mock('./board/discussionApi', async (importOriginal) => {
   }
 })
 
+// The action items read and writes (#26) use the same pattern, so no test
+// reaches get_cycle_actions or an action write. The constants and the date
+// helper stay real.
+vi.mock('./board/actionsApi', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./board/actionsApi')>()
+  const { actionsMock: mock } = await import('./test/actionsMock')
+  return {
+    ...actual,
+    fetchCycleActions: mock.fetchCycleActions,
+    createAction: mock.createAction,
+    updateAction: mock.updateAction,
+    setActionStatus: mock.setActionStatus,
+    deleteAction: mock.deleteAction,
+  }
+})
+
 // jsdom lacks a few browser APIs that Radix and sonner feature-detect.
 if (typeof globalThis.ResizeObserver === 'undefined') {
   globalThis.ResizeObserver = class ResizeObserver {
@@ -150,6 +167,7 @@ beforeEach(() => {
   resetAiClusteringMock()
   resetVotesMock()
   resetDiscussionMock()
+  resetActionsMock()
   // Sonner keeps its toast queue outside React, so dismiss it between tests.
   toast.dismiss()
   // The QueryClient is a singleton in the app; reset it between tests so one
