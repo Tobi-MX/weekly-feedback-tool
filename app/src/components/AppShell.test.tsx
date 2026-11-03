@@ -1,7 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { mockRestoredSession } from '../test/authMock'
-import { boardMock } from '../test/boardMock'
+import { boardMock, NO_VOTES } from '../test/boardMock'
 import { cyclesMock } from '../test/cyclesMock'
 import { profileMock } from '../test/profileMock'
 import { projectsMock } from '../test/projectsMock'
@@ -42,6 +42,7 @@ async function renderSignedIn(
       isRevealed: false,
       cards: [],
       clusters: [],
+      ...NO_VOTES,
     })
   }
   renderApp({ initialEntries: [path] })

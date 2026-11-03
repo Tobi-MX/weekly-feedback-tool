@@ -159,10 +159,11 @@ Audio/video transcription is delegated to a managed speech-to-text API. Running 
 
 **Hidden vote totals**
 
-- `votes` rows are readable only by the voter.
-- `get_vote_totals` is a `security definer` RPC that returns aggregates only when voting is closed or everyone has voted.
-- Realtime is **not** enabled on `votes`.
-- A `cycle_events` row broadcasts "voting closed" and stage changes instead.
+- `votes` is default-deny (#22): RLS is enabled with no policy, `anon` and `authenticated` hold no privilege, and only `service_role` keeps `select, insert, update, delete`. It is not in `supabase_realtime` and no view reads it. Votes are written only through `cast_vote` / `remove_vote`, and a member reads only their own votes, through `get_cycle_board`'s `my_votes` and `votes_remaining`.
+- `get_vote_totals` is a `security definer` RPC that returns aggregates only when `voting_closed_at is not null` **and** the status is `discuss` or `closed`, the same for every caller, the facilitator included. There is no "everyone has voted" gate: it would show totals while the stage is still `vote`, and a member could then move votes. "Results appear when everyone has voted" is reached through #24's auto-close, which sets `voting_closed_at`. A cycle closed from `vote` with `close_cycle` keeps `voting_closed_at` null and never shows totals.
+- Votes outlive their voter: `voter_id` is `on delete set null`, so a deleted account's votes still count in totals but belong to nobody's budget. A removed member's votes (#49) stay and count.
+- No broadcast and no side effects: a vote write inserts into or deletes from `votes` and nothing else. It changes no `feedback_cycles`, `project_members`, `clusters`, or `cluster_cards` row (their `updated_at` included) and records no `cycle_events` row. The voter's own board refetch is the only signal.
+- Residual risks, accepted: a vote write can wait milliseconds on the cycle row lock while another member's write holds it, which reveals at most that someone wrote at the same moment, never what they voted for. After close, totals are aggregates; in a 2-member team either member can subtract their own votes to work out the other's (inherent to showing totals; the plan rejected permanently private votes).
 
 **Facilitator actions**
 
@@ -220,7 +221,7 @@ Names are indicative; exact columns will be finalized with migrations.
 | `card_authors` | Card → author mapping; self-only RLS; never exposed by the board RPC |
 | `clusters` | `id`, `cycle_id`, `name` (trimmed, 1–100 characters, no control characters, unique per cycle ignoring case), `source` (`manual` / `ai`), `sort_order` (unique per cycle; new clusters are appended), `created_at`, `updated_at` (for operators only, never returned). No creator or editor column. At most 50 per cycle. The discussion status is not here yet: #25 adds it in its own migration |
 | `cluster_cards` | `cycle_id`, `cluster_id`, `card_id` (primary key: a card is in at most one cluster), `sort_order`. Composite foreign keys keep a card in a cluster of its own cycle; deleting a cluster or a card removes its rows. Absence means ungrouped. No actor column |
-| `votes` | Cycle, cluster, voter; up to 3 per voter, stackable |
+| `votes` | `id`, `cycle_id` (references `feedback_cycles`, on delete cascade), `cluster_id` (with `cycle_id`, references `clusters (id, cycle_id)`, on delete cascade, so a vote only points at a cluster of its own cycle), `voter_id` (references `auth.users`, on delete set null; never null when written), `created_at` (for operators only, never returned). One row per vote; up to 3 per voter per cycle, stackable. Indexed on `(cycle_id, voter_id)` and `cluster_id`. Default-deny (#22) |
 | `notes` | Cycle, optional cluster, author, text, timestamps |
 | `cycle_events` | Broadcast events for Realtime: `id`, `cycle_id`, `type` (`stage_changed` or `clusters_changed`), `from_status`, `to_status`, `actor_id`, `payload` (`{}`), `created_at`. `stage_changed`: one row per status change, written by a trigger on `feedback_cycles`, with `actor_id` the user who changed the stage (or null). `clusters_changed` (#17): one row per changed cycle for each statement on `clusters` or `cluster_cards`, written by triggers on those tables, with `from_status = to_status` = the current status and `actor_id` always null. Only triggers write it; members of the cycle's project read it, nobody updates it. It never holds card text, card ids, cluster ids or names, counts, author ids, per-member data, or vote data |
 
@@ -257,12 +258,12 @@ All RPCs validate the caller's membership and the current cycle stage.
 
 | RPC | Purpose |
 |---|---|
-| `get_cycle_board` | Cards visible to the caller (own before reveal, all after), attributed author names, `is_mine` on attributed cards; `clusters` (#17): `[]` before reveal, then every cluster by `sort_order` with exactly `cluster_id`, `name`, `source`, `card_ids` (by `cluster_cards.sort_order`, then `card_id`), the same for every caller; own votes (#22) added later; never vote totals |
+| `get_cycle_board` | Cards visible to the caller (own before reveal, all after), attributed author names, `is_mine` on attributed cards; `clusters` (#17): `[]` before reveal, then every cluster by `sort_order` with exactly `cluster_id`, `name`, `source`, `card_ids` (by `cluster_cards.sort_order`, then `card_id`), the same for every caller; `my_votes` (#22): the caller's own votes, one element per cluster with exactly `cluster_id` and `vote_count` (1–3) by cluster `sort_order`, `[]` when none; `votes_remaining` (#22): 3 minus the caller's votes (0–3). Both read only the caller's rows; never vote totals |
 | `get_cycle_status` | One row: `cycle_id`, `status`, `is_revealed`, `member_count`, `submitted_member_count`, `my_card_count`, and `card_count` (null before reveal). Aggregate counts only — no ids, names, times, or card content. Voting status is left to #24 |
 | `create_card` | Own card during collecting; accepts `is_anonymous` per card |
 | `update_card` / `delete_card` | Own card, collecting stage only |
-| `cast_vote` / `remove_vote` | Voting stage; enforce max 3 total, stackable |
-| `get_vote_totals` | Only after voting closes / everyone has voted |
+| `cast_vote` / `remove_vote` | `(p_cycle_id uuid, p_cluster_id uuid)` returns `(cluster_id, vote_count, votes_remaining)`: the caller's own count on that cluster and remaining votes. Any member, the facilitator and owner with the same 3 votes; `vote` stage only; any cluster of the cycle (`manual` or `ai`, with or without cards). Lock the cycle row `FOR UPDATE` (only that lock) before the status check and any use of `votes`, so the cap holds under races and votes serialize with stage changes. Errors: `not_project_member` (null user, unknown cycle, non-member), `cycle_not_voting`, `cluster_not_found`, then `no_votes_remaining` (cast) or `no_vote_to_remove` (remove, which deletes exactly one row). No event, no side effect |
+| `get_vote_totals` | `(p_cycle_id uuid)` returns `(cluster_id, total_votes)`: one row per cluster, zeros included, by `total_votes` desc, then `sort_order`, then `cluster_id`. Errors: `not_project_member`, then `voting_not_closed` unless `voting_closed_at` is set and the status is `discuss` or `closed`. Aggregates only, the same for every caller |
 | `add_note` | Discussion notes |
 | `update_action_status` | Owner or facilitator |
 
@@ -537,7 +538,7 @@ At MVP scale, the dominant costs are engineering time, not infrastructure:
 
 ## 16. Open questions
 
-1. **Ungrouped cards and voting.** The plan ranks clusters by votes but allows cards to remain ungrouped. Are ungrouped cards votable via an implicit "Ungrouped" bucket, or excluded from voting?
+1. ~~**Ungrouped cards and voting.**~~ Answered by #22: clusters only. Every cluster of the cycle (`manual` or `ai`, including one with zero cards) can receive votes; ungrouped cards, single cards, and an implicit "Ungrouped" bucket cannot.
 2. **Attendance.** Is attendance entered manually by the facilitator, or derived from submissions/votes?
 3. **Invitations.** Slack/email integrations are out of scope. Is an invite link/code sufficient, or should Supabase Auth send email invites?
 4. **Multiple facilitators.** One facilitator per project, or can several members hold the role?

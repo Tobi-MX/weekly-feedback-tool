@@ -444,7 +444,7 @@ select is(
   array[
     'create_cluster:6e419da2c54e963084d55378eac06a54',
     'delete_cluster:fe503ba041904b04400473e98a80f85a',
-    'get_cycle_board:63317c82ae89c6b9c7851c07bafefbc7',
+    'get_cycle_board:a652b8eee54255a3b19a6448c77fc9ee',
     'merge_clusters:9927da8d94660c9750277da2cf16b1f3',
     'move_card:37b6cf3190d3a1e70471707305f1be5f',
     'rename_cluster:d5bf8b168f739970d58bb3aa66dc6864',

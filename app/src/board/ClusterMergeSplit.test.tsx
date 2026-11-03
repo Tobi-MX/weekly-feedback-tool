@@ -6,7 +6,7 @@ import type { CycleStatus } from '../cycles/cycleStatus'
 import { queryClient } from '../lib/queryClient'
 import type { ProjectMember } from '../projects/membersApi'
 import { deferred, mockRestoredSession } from '../test/authMock'
-import { boardMock } from '../test/boardMock'
+import { boardMock, NO_VOTES } from '../test/boardMock'
 import { cyclesMock } from '../test/cyclesMock'
 import { membersMock } from '../test/membersMock'
 import { profileMock } from '../test/profileMock'
@@ -100,6 +100,7 @@ function boardOf(
     isRevealed: status !== 'collecting',
     cards,
     clusters,
+    ...NO_VOTES,
   }
 }
 

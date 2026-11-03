@@ -70,6 +70,17 @@ const board = {
   is_revealed: true,
   cards: [attributedCard, anonymousCard, deletedAuthorCard],
   clusters: [processCluster, emptyAiCluster],
+  my_votes: [],
+  votes_remaining: 3,
+}
+
+// The board's other five top-level keys, without the two vote keys.
+const boardWithoutVotes = {
+  cycle_id: board.cycle_id,
+  status: board.status,
+  is_revealed: board.is_revealed,
+  cards: board.cards,
+  clusters: board.clusters,
 }
 
 function createClientMock(result: DbResult) {
@@ -162,7 +173,55 @@ describe('fetchCycleBoard', () => {
           cardIds: [],
         },
       ],
+      myVotes: [],
+      votesRemaining: 3,
     })
+  })
+
+  it('parses own votes spread over clusters, in response order', async () => {
+    createClientMock({
+      data: {
+        ...board,
+        my_votes: [
+          { cluster_id: processCluster.cluster_id, vote_count: 2 },
+          { cluster_id: emptyAiCluster.cluster_id, vote_count: 1 },
+        ],
+        votes_remaining: 0,
+      },
+      error: null,
+    })
+
+    const parsed = await fetchCycleBoard(CYCLE_ID)
+    expect(parsed?.myVotes).toStrictEqual([
+      { clusterId: processCluster.cluster_id, voteCount: 2 },
+      { clusterId: emptyAiCluster.cluster_id, voteCount: 1 },
+    ])
+    expect(parsed?.votesRemaining).toBe(0)
+  })
+
+  it('parses 3 stacked votes on one cluster with 0 remaining', async () => {
+    createClientMock({
+      data: {
+        ...board,
+        my_votes: [{ cluster_id: emptyAiCluster.cluster_id, vote_count: 3 }],
+        votes_remaining: 0,
+      },
+      error: null,
+    })
+
+    const parsed = await fetchCycleBoard(CYCLE_ID)
+    expect(parsed?.myVotes).toStrictEqual([
+      { clusterId: emptyAiCluster.cluster_id, voteCount: 3 },
+    ])
+    expect(parsed?.votesRemaining).toBe(0)
+  })
+
+  it('parses no votes with 3 remaining', async () => {
+    createClientMock({ data: board, error: null })
+
+    const parsed = await fetchCycleBoard(CYCLE_ID)
+    expect(parsed?.myVotes).toStrictEqual([])
+    expect(parsed?.votesRemaining).toBe(3)
   })
 
   it('parses an empty board', async () => {
@@ -183,6 +242,8 @@ describe('fetchCycleBoard', () => {
       isRevealed: false,
       cards: [],
       clusters: [],
+      myVotes: [],
+      votesRemaining: 3,
     })
   })
 
@@ -305,6 +366,86 @@ describe('fetchCycleBoard', () => {
         ],
       },
     ],
+    ['a missing my_votes', { ...boardWithoutVotes, votes_remaining: 3 }],
+    ['a missing votes_remaining', { ...boardWithoutVotes, my_votes: [] }],
+    ['my_votes: null', { ...board, my_votes: null }],
+    [
+      'an extra key in a my_votes element',
+      {
+        ...board,
+        my_votes: [
+          { cluster_id: processCluster.cluster_id, vote_count: 1, total: 5 },
+        ],
+        votes_remaining: 2,
+      },
+    ],
+    [
+      'a vote_count of 0',
+      {
+        ...board,
+        my_votes: [{ cluster_id: processCluster.cluster_id, vote_count: 0 }],
+        votes_remaining: 3,
+      },
+    ],
+    [
+      'a vote_count of 4',
+      {
+        ...board,
+        my_votes: [{ cluster_id: processCluster.cluster_id, vote_count: 4 }],
+        votes_remaining: 0,
+      },
+    ],
+    [
+      'a vote_count of 1.5',
+      {
+        ...board,
+        my_votes: [{ cluster_id: processCluster.cluster_id, vote_count: 1.5 }],
+        votes_remaining: 1.5,
+      },
+    ],
+    ['a votes_remaining of -1', { ...board, votes_remaining: -1 }],
+    ['a votes_remaining of 4', { ...board, votes_remaining: 4 }],
+    [
+      'a my_votes cluster_id that is not a cluster of the response',
+      {
+        ...board,
+        my_votes: [
+          {
+            cluster_id: 'b9000000-0000-4000-8000-000000000009',
+            vote_count: 1,
+          },
+        ],
+        votes_remaining: 2,
+      },
+    ],
+    [
+      'a cluster twice in my_votes',
+      {
+        ...board,
+        my_votes: [
+          { cluster_id: processCluster.cluster_id, vote_count: 1 },
+          { cluster_id: processCluster.cluster_id, vote_count: 1 },
+        ],
+        votes_remaining: 1,
+      },
+    ],
+    [
+      'votes and votes_remaining that add up to less than 3',
+      {
+        ...board,
+        my_votes: [{ cluster_id: processCluster.cluster_id, vote_count: 1 }],
+        votes_remaining: 1,
+      },
+    ],
+    [
+      'votes and votes_remaining that add up to more than 3',
+      {
+        ...board,
+        my_votes: [{ cluster_id: processCluster.cluster_id, vote_count: 2 }],
+        votes_remaining: 2,
+      },
+    ],
+    ['no votes with 2 remaining', { ...board, votes_remaining: 2 }],
   ])('fails to parse %s', async (_label, data) => {
     createClientMock({ data, error: null })
 

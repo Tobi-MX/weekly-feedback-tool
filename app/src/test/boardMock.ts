@@ -11,6 +11,15 @@ import { ClustersApiError } from '../board/clusterErrors'
  * `null` (not found), like `fetchCycle`, and every cluster write fails with
  * `unknown` until a test configures it.
  */
+/**
+ * The caller's vote fields of a board where the caller has not voted (#22):
+ * no own votes and the full budget. Board fixtures spread this.
+ */
+export const NO_VOTES: Pick<CycleBoard, 'myVotes' | 'votesRemaining'> = {
+  myVotes: [],
+  votesRemaining: 3,
+}
+
 export const boardMock = {
   fetchCycleBoard: vi.fn<(cycleId: string) => Promise<CycleBoard | null>>(),
   createCluster:

@@ -440,15 +440,15 @@ select is(
 select is((select p.prosrc ~* '(owner_id|card_authors|profiles|cycle_events|execute|raise\s+notice)' from pg_proc p where p.oid = r.fn), false, r.name || ' mentions no owner_id, card_authors, profiles, cycle_events, execute, or raise notice') from cf_test.rpcs r order by r.name;
 select is((select (select count(*)::int from regexp_matches(p.prosrc, 'is_project_facilitator', 'g')) from pg_proc p where p.oid = r.fn), 1, r.name || ' checks the facilitator exactly once') from cf_test.rpcs r order by r.name;
 
-select is((select md5(prosrc) from pg_proc where oid = 'public.get_cycle_board(uuid)'::regprocedure), '63317c82ae89c6b9c7851c07bafefbc7', 'get_cycle_board is unchanged');
+select is((select md5(prosrc) from pg_proc where oid = 'public.get_cycle_board(uuid)'::regprocedure), 'a652b8eee54255a3b19a6448c77fc9ee', 'get_cycle_board is unchanged');
 select is(
-  -- ai_runs is added by #20's later migration, not by this one.
-  (select string_agg(table_name, ',' order by table_name) from information_schema.tables where table_schema = 'public' and table_name <> 'ai_runs'),
+  -- ai_runs and votes are added by #20's and #22's later migrations, not by this one.
+  (select string_agg(table_name, ',' order by table_name) from information_schema.tables where table_schema = 'public' and table_name not in ('ai_runs', 'votes')),
   'card_authors,cards,cluster_cards,clusters,cycle_events,feedback_cycles,profiles,project_invites,project_members,projects',
   'no table or view is added to public'
 );
 select is(
-  (select md5(string_agg(table_name || '.' || column_name || ':' || data_type, ',' order by table_name, ordinal_position)) from information_schema.columns where table_schema = 'public' and table_name <> 'ai_runs'),
+  (select md5(string_agg(table_name || '.' || column_name || ':' || data_type, ',' order by table_name, ordinal_position)) from information_schema.columns where table_schema = 'public' and table_name not in ('ai_runs', 'votes')),
   'e519634cb52f8c0b7a540df3f7a00978',
   'no column is added or changed in public'
 );
