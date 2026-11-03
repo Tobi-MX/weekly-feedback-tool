@@ -1,5 +1,6 @@
 import type { CycleStatus } from '@/cycles/cycleStatus'
-import type { BoardCard, CycleBoard } from './boardApi'
+import type { BoardCard, BoardCluster, CycleBoard } from './boardApi'
+import type { VoteTotal } from './voteTotalsApi'
 
 /** The retrospective stages the indicator shows, in order. */
 export const BOARD_STAGES = ['reveal', 'cluster', 'vote', 'discuss'] as const
@@ -81,4 +82,47 @@ export function votingSummary(board: CycleBoard): string {
       ? '1 ungrouped card'
       : `${ungroupedCount} ungrouped cards`
   return `There ${clusterCount === 1 ? 'is' : 'are'} ${clusters} and ${cards}. Ungrouped cards cannot receive votes.`
+}
+
+/** One topic of the ranked agenda (#24): a cluster and its total votes. */
+export interface AgendaItem {
+  readonly cluster: BoardCluster
+  readonly totalVotes: number
+}
+
+/**
+ * Joins the vote totals (`fetchVoteTotals`) to the board's clusters by id,
+ * in the totals' order: the server's ranking, never re-sorted here. Returns
+ * null (shown as a results load error) when the two id sets differ, an id
+ * repeats, or a total is not a non-negative integer.
+ */
+export function rankedAgenda(
+  board: Pick<CycleBoard, 'clusters'>,
+  totals: readonly VoteTotal[],
+): readonly AgendaItem[] | null {
+  const clustersById = new Map(
+    board.clusters.map((cluster) => [cluster.clusterId, cluster]),
+  )
+  if (
+    clustersById.size !== board.clusters.length ||
+    totals.length !== board.clusters.length
+  ) {
+    return null
+  }
+  const seen = new Set<string>()
+  const items: AgendaItem[] = []
+  for (const total of totals) {
+    const cluster = clustersById.get(total.clusterId)
+    if (
+      cluster === undefined ||
+      seen.has(total.clusterId) ||
+      !Number.isInteger(total.totalVotes) ||
+      total.totalVotes < 0
+    ) {
+      return null
+    }
+    seen.add(total.clusterId)
+    items.push({ cluster, totalVotes: total.totalVotes })
+  }
+  return items
 }

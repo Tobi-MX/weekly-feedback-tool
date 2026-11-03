@@ -82,6 +82,14 @@ vi.mock('./board/votesApi', async () => {
   return mock
 })
 
+// The vote totals read (#24) shares the votes mock controller, so no test
+// reaches get_vote_totals. The error class and code helper stay real.
+vi.mock('./board/voteTotalsApi', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./board/voteTotalsApi')>()
+  const { votesMock: mock } = await import('./test/votesMock')
+  return { ...actual, fetchVoteTotals: mock.fetchVoteTotals }
+})
+
 // jsdom lacks a few browser APIs that Radix and sonner feature-detect.
 if (typeof globalThis.ResizeObserver === 'undefined') {
   globalThis.ResizeObserver = class ResizeObserver {
