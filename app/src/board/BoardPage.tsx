@@ -49,6 +49,7 @@ import {
   cycleBoardQueryKey,
   useCycleBoardQuery,
 } from './useBoard'
+import { discussionQueryKey } from './useDiscussion'
 import { voteTotalsQueryKey } from './useVoteTotals'
 
 export const BOARD_LOAD_ERROR_MESSAGE = 'Could not load the board.'
@@ -159,6 +160,9 @@ interface ModeProps {
   readonly onVoteModeUnmount: (hadFocus: boolean) => void
   readonly onLostAccess: () => void
   readonly onNotFacilitator: () => void
+  readonly onRefetchMembers: () => void
+  /** The board's poll interval, for the discussion query (#25). */
+  readonly refetchInterval: number | false
   readonly ai: AiClusteringRun
 }
 
@@ -180,6 +184,8 @@ function BoardMode({
   onVoteModeUnmount,
   onLostAccess,
   onNotFacilitator,
+  onRefetchMembers,
+  refetchInterval,
   ai,
 }: ModeProps) {
   const { status, isRevealed, cards } = board
@@ -228,7 +234,8 @@ function BoardMode({
       from = 'vote'
       break
     case 'discuss':
-      // The ranked agenda renders its own intro (#24).
+      // The ranked agenda renders its own intro (#24), with the discussion
+      // statuses and notes (#25).
       heading = 'Discuss'
       break
     case 'closed':
@@ -277,7 +284,14 @@ function BoardMode({
           <VoteMode board={board} onLostAccess={onLostAccess} />
         </FocusWatch>
       ) : status === 'discuss' ? (
-        <DiscussMode board={board} onLostAccess={onLostAccess} />
+        <DiscussMode
+          board={board}
+          isFacilitator={isFacilitator}
+          refetchInterval={refetchInterval}
+          onLostAccess={onLostAccess}
+          onNotFacilitator={onNotFacilitator}
+          onRefetchMembers={onRefetchMembers}
+        />
       ) : status === 'cluster' ? (
         <ClusterMode
           board={board}
@@ -376,9 +390,12 @@ function BoardScreen({ cycleId }: { cycleId: string }) {
     void queryClient.invalidateQueries({
       queryKey: cycleQueryKey(userId, cycleId),
     })
-    // Only an active (discuss) totals query is refetched.
+    // Only an active (discuss) totals or discussion query is refetched.
     void queryClient.invalidateQueries({
       queryKey: voteTotalsQueryKey(userId, cycleId),
+    })
+    void queryClient.invalidateQueries({
+      queryKey: discussionQueryKey(userId, cycleId),
     })
     if (projectId !== undefined) {
       void queryClient.invalidateQueries({
@@ -584,6 +601,8 @@ function BoardScreen({ cycleId }: { cycleId: string }) {
           onVoteModeUnmount={onVoteModeUnmount}
           onLostAccess={loseAccess}
           onNotFacilitator={onNotFacilitator}
+          onRefetchMembers={refetchMembers}
+          refetchInterval={refetchInterval}
           ai={ai}
         />
       </>

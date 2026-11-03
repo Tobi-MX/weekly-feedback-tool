@@ -725,13 +725,13 @@ select is((select array_agg(tablename::text order by tablename) from pg_publicat
 select is((select count(*)::int from pg_views where schemaname = 'public'), 0, 'no view in public');
 select is(
   (select array_agg(c.relname || '.' || a.attname order by c.relname, a.attnum) from pg_attribute a join pg_class c on c.oid = a.attrelid where c.oid in ('public.clusters'::regclass, 'public.cluster_cards'::regclass) and a.attnum > 0 and not a.attisdropped),
-  array['cluster_cards.cycle_id', 'cluster_cards.cluster_id', 'cluster_cards.card_id', 'cluster_cards.sort_order', 'clusters.id', 'clusters.cycle_id', 'clusters.name', 'clusters.source', 'clusters.sort_order', 'clusters.created_at', 'clusters.updated_at'],
-  'clusters and cluster_cards have exactly #17''s columns'
+  array['cluster_cards.cycle_id', 'cluster_cards.cluster_id', 'cluster_cards.card_id', 'cluster_cards.sort_order', 'clusters.id', 'clusters.cycle_id', 'clusters.name', 'clusters.source', 'clusters.sort_order', 'clusters.created_at', 'clusters.updated_at', 'clusters.discussion_status'],
+  'clusters and cluster_cards have exactly #17''s columns, plus #25''s discussion_status'
 );
 select is(
   (select array_agg(conname::text order by conname) from pg_constraint where conrelid in ('public.clusters'::regclass, 'public.cluster_cards'::regclass)),
-  array['cluster_cards_card_fkey', 'cluster_cards_cluster_fkey', 'cluster_cards_pkey', 'clusters_cycle_id_fkey', 'clusters_cycle_id_sort_order_key', 'clusters_id_cycle_id_key', 'clusters_name_check', 'clusters_pkey', 'clusters_source_check'],
-  'clusters and cluster_cards have exactly #17''s constraints'
+  array['cluster_cards_card_fkey', 'cluster_cards_cluster_fkey', 'cluster_cards_pkey', 'clusters_cycle_id_fkey', 'clusters_cycle_id_sort_order_key', 'clusters_discussion_status_check', 'clusters_id_cycle_id_key', 'clusters_name_check', 'clusters_pkey', 'clusters_source_check'],
+  'clusters and cluster_cards have exactly #17''s constraints, plus #25''s discussion_status check'
 );
 
 -- ---------------------------------------------------------------------------

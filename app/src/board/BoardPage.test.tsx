@@ -14,6 +14,7 @@ import {
 } from '../test/authMock'
 import { boardMock, NO_VOTES } from '../test/boardMock'
 import { cyclesMock } from '../test/cyclesMock'
+import { discussionMock } from '../test/discussionMock'
 import { membersMock } from '../test/membersMock'
 import { profileMock } from '../test/profileMock'
 import { renderApp } from '../test/renderApp'
@@ -162,9 +163,17 @@ function setup(options: SetupOptions = {}) {
     ...cycle,
     status: options.cycleStatus ?? options.board?.status ?? 'reveal',
   })
-  boardMock.fetchCycleBoard.mockResolvedValue(
-    options.board ?? boardOf('reveal'),
-  )
+  const board = options.board ?? boardOf('reveal')
+  boardMock.fetchCycleBoard.mockResolvedValue(board)
+  // #25: discuss mode also reads the statuses and notes (all pending, none).
+  discussionMock.fetchDiscussion.mockResolvedValue({
+    cycleId: CYCLE_ID,
+    statuses: board.clusters.map((cluster) => ({
+      clusterId: cluster.clusterId,
+      discussionStatus: 'pending',
+    })),
+    notes: [],
+  })
   membersMock.fetchProjectMembers.mockResolvedValue(
     options.members ?? asFacilitator,
   )
@@ -295,7 +304,13 @@ describe('board modes', () => {
         await waitFor(() => {
           expect(membersMock.fetchProjectMembers).toHaveBeenCalled()
         })
-        expect(within(main).queryAllByRole('button')).toHaveLength(0)
+        // #25: discuss mode has Add note for the general notes, for every
+        // member, even with no topics.
+        expect(
+          within(main)
+            .queryAllByRole('button')
+            .map((button) => button.getAttribute('aria-label')),
+        ).toEqual(status === 'discuss' ? ['Add a general note'] : [])
       } else {
         expect(
           await screen.findByRole('button', { name: control }),
@@ -474,7 +489,12 @@ describe('board modes', () => {
     ).toBeInTheDocument()
     expect(screen.getByText(UNGROUPED_NOT_VOTED)).toBeInTheDocument()
     const main = screen.getByRole('main')
-    expect(within(main).queryAllByRole('button')).toHaveLength(0)
+    // #25: the only control is Add note for the general notes.
+    expect(
+      (await within(main).findAllByRole('button')).map((button) =>
+        button.getAttribute('aria-label'),
+      ),
+    ).toEqual(['Add a general note'])
     expect(within(main).queryAllByRole('textbox')).toHaveLength(0)
   })
 
@@ -573,10 +593,17 @@ describe('board cards', () => {
     await modeHeading('Discuss')
 
     expect(await screen.findByText(NO_TOPICS)).toBeInTheDocument()
-    expect(screen.queryAllByRole('heading', { level: 3 })).toHaveLength(0)
-    expect(within(screen.getByRole('main')).queryAllByRole('button')).toEqual(
-      [],
-    )
+    // #25: General notes shows with zero topics; nothing else does.
+    expect(
+      (await screen.findAllByRole('heading', { level: 3 })).map(
+        (heading) => heading.textContent,
+      ),
+    ).toEqual(['General notes (0)'])
+    expect(
+      within(screen.getByRole('main'))
+        .queryAllByRole('button')
+        .map((button) => button.getAttribute('aria-label')),
+    ).toEqual(['Add a general note'])
   })
 
   it('with zero cards and zero clusters vote shows its no-clusters line and no section', async () => {
