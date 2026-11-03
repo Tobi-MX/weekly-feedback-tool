@@ -7,6 +7,7 @@ import type { ProjectMember } from '../projects/membersApi'
 import { deferred, mockRestoredSession } from '../test/authMock'
 import { boardMock } from '../test/boardMock'
 import { cyclesMock } from '../test/cyclesMock'
+import { discussionMock } from '../test/discussionMock'
 import { membersMock } from '../test/membersMock'
 import { profileMock } from '../test/profileMock'
 import { renderApp } from '../test/renderApp'
@@ -194,6 +195,15 @@ function setup(options: SetupOptions = {}) {
   if (options.totals !== undefined) {
     votesMock.fetchVoteTotals.mockResolvedValue(options.totals)
   }
+  // #25: discuss mode also reads the statuses and notes (all pending, none).
+  discussionMock.fetchDiscussion.mockResolvedValue({
+    cycleId: CYCLE_ID,
+    statuses: board.clusters.map((cluster) => ({
+      clusterId: cluster.clusterId,
+      discussionStatus: 'pending',
+    })),
+    notes: [],
+  })
   return renderApp({ initialEntries: [PATH] })
 }
 
@@ -513,7 +523,15 @@ describe('identical for everyone, aggregates only', () => {
         expect(membersMock.fetchProjectMembers).toHaveBeenCalled()
       })
       const board = screen.getByTestId('discuss-board')
-      html.push(board.outerHTML)
+      // #25: the facilitator also has a status group per topic; everything
+      // else is the same for every member.
+      const shared = board.cloneNode(true) as HTMLElement
+      for (const group of shared.querySelectorAll(
+        '[role="group"][aria-label^="Discussion status for "]',
+      )) {
+        group.remove()
+      }
+      html.push(shared.outerHTML)
 
       const text = board.textContent ?? ''
       expect(text).not.toMatch(/Your votes/i)
@@ -526,7 +544,18 @@ describe('identical for everyone, aggregates only', () => {
       expect(
         board.querySelector('[role="progressbar"], progress, meter'),
       ).toBeNull()
-      expect(within(board).queryAllByRole('button')).toHaveLength(0)
+      // #25: apart from the facilitator's status groups, the only controls
+      // are Add note, the same for everyone.
+      expect(
+        within(shared)
+          .queryAllByRole('button')
+          .map((button) => button.getAttribute('aria-label')),
+      ).toEqual([
+        'Add note to Docs',
+        'Add note to Process',
+        'Add note to Tools',
+        'Add a general note',
+      ])
       view.unmount()
       queryClient.clear()
       membersMock.fetchProjectMembers.mockClear()
