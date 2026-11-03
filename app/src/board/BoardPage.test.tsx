@@ -19,6 +19,7 @@ import { profileMock } from '../test/profileMock'
 import { renderApp } from '../test/renderApp'
 import type { BoardCard, CycleBoard } from './boardApi'
 import { BoardApiError } from './boardErrors'
+import { DISCUSS_INTRO, NO_TOPICS, UNGROUPED_NOT_VOTED } from './DiscussMode'
 import { VOTE_INTRO, VOTE_TOTALS_HIDDEN } from './VoteMode'
 
 const CYCLE_ID = '30000000-0000-4000-8000-000000000001'
@@ -239,15 +240,11 @@ describe('board modes', () => {
       'Start voting',
     ],
     // #23: vote mode replaces the placeholder. With no clusters it has no
-    // vote control (VoteMode.test.tsx covers the clusters).
-    ['vote', true, 'Vote', VOTE_INTRO, null],
-    [
-      'discuss',
-      true,
-      'Discuss',
-      'The discussion agenda is not available yet.',
-      null,
-    ],
+    // vote control (VoteMode.test.tsx covers the clusters); the facilitator
+    // has Close voting (#24).
+    ['vote', true, 'Vote', VOTE_INTRO, 'Close voting'],
+    // #24: the ranked agenda replaces the placeholder.
+    ['discuss', true, 'Discuss', DISCUSS_INTRO, null],
     ['closed', true, 'Closed', 'This retrospective is closed.', null],
     [
       'closed',
@@ -458,21 +455,28 @@ describe('board modes', () => {
     },
   )
 
-  it.each(['discuss'] as const)(
-    'the %s placeholder is plain text with no control',
-    async (status) => {
-      setup({ board: boardOf(status) })
-      await screen.findByRole('heading', { level: 2 })
+  it('discuss shows the agenda, not the placeholder or the flat card list (#24)', async () => {
+    setup({ board: boardOf('discuss') })
+    await modeHeading('Discuss')
 
-      const panel = screen.getByTestId('mode-placeholder')
-      expect(within(panel).queryAllByRole('button')).toHaveLength(0)
-      expect(within(panel).queryAllByRole('link')).toHaveLength(0)
-      expect(within(panel).queryAllByRole('textbox')).toHaveLength(0)
-      expect(panel.querySelector('input, button, a, [aria-disabled]')).toBe(
-        null,
-      )
-    },
-  )
+    expect(await screen.findByTestId('discuss-board')).toBeInTheDocument()
+    expect(screen.queryByTestId('mode-placeholder')).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('The discussion agenda is not available yet.'),
+    ).not.toBeInTheDocument()
+    // No clusters: no topics, and the six cards are ungrouped, read-only.
+    expect(screen.getByText(NO_TOPICS)).toBeInTheDocument()
+    expect(
+      screen.queryByRole('heading', { level: 3, name: 'Start (3)' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { level: 3, name: 'Ungrouped (6)' }),
+    ).toBeInTheDocument()
+    expect(screen.getByText(UNGROUPED_NOT_VOTED)).toBeInTheDocument()
+    const main = screen.getByRole('main')
+    expect(within(main).queryAllByRole('button')).toHaveLength(0)
+    expect(within(main).queryAllByRole('textbox')).toHaveLength(0)
+  })
 
   it('vote shows vote mode, not the placeholder or the flat card list (#23)', async () => {
     setup({ board: boardOf('vote') })
@@ -549,8 +553,9 @@ describe('board cards', () => {
   })
 
   // Cluster mode always has its Ungrouped section (ClusterMode.test.tsx).
-  // Vote mode has its own empty layouts (below and VoteMode.test.tsx).
-  it.each(['reveal', 'discuss', 'closed'] as const)(
+  // Vote and discuss mode have their own empty layouts (below,
+  // VoteMode.test.tsx, and DiscussMode.test.tsx).
+  it.each(['reveal', 'closed'] as const)(
     'with zero cards %s shows one line and no section',
     async (status) => {
       setup({ board: boardOf(status, true, []) })
@@ -563,8 +568,20 @@ describe('board cards', () => {
     },
   )
 
+  it('with zero cards and zero clusters discuss shows its no-topics line and no section', async () => {
+    setup({ board: boardOf('discuss', true, []) })
+    await modeHeading('Discuss')
+
+    expect(await screen.findByText(NO_TOPICS)).toBeInTheDocument()
+    expect(screen.queryAllByRole('heading', { level: 3 })).toHaveLength(0)
+    expect(within(screen.getByRole('main')).queryAllByRole('button')).toEqual(
+      [],
+    )
+  })
+
   it('with zero cards and zero clusters vote shows its no-clusters line and no section', async () => {
-    setup({ board: boardOf('vote', true, []) })
+    // A member: the facilitator also has Close voting (#24).
+    setup({ board: boardOf('vote', true, []), members: asMember })
     await modeHeading('Vote')
 
     expect(
@@ -965,6 +982,277 @@ describe('advancing the stage', () => {
         screen.queryByRole('button', { name: 'Start clustering' }),
       ).not.toBeInTheDocument()
     })
+  })
+})
+
+describe('closing voting (#24)', () => {
+  const CONFIRM =
+    'Close voting for everyone? Members who have not used all their votes cannot vote any more, and the results are shown to the whole team. You cannot reopen voting.'
+  const SUCCESS = 'Voting closed. The board moved to Discuss.'
+  const closedRow = {
+    id: CYCLE_ID,
+    status: 'discuss' as const,
+    votingClosedAt: '2026-11-03T10:00:00+00:00',
+  }
+
+  function closeButton(): HTMLElement | null {
+    return screen.queryByRole('button', { name: 'Close voting' })
+  }
+
+  async function openConfirmation(): Promise<HTMLElement> {
+    fireEvent.click(await screen.findByRole('button', { name: 'Close voting' }))
+    return screen.getByRole('group', { name: 'Close voting' })
+  }
+
+  it('the facilitator sees Close voting in vote', async () => {
+    setup({ board: boardOf('vote') })
+    expect(
+      await screen.findByRole('button', { name: 'Close voting' }),
+    ).toBeInTheDocument()
+    // After the intro (vote mode's own) and before the vote content.
+    const button = screen.getByRole('button', { name: 'Close voting' })
+    expect(
+      button.compareDocumentPosition(screen.getByTestId('vote-board')) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it.each([
+    ['a member', asMember],
+    ['the owner who is not the facilitator', asFormerFacilitator],
+  ])('%s sees no Close voting', async (_label, members) => {
+    setup({ board: boardOf('vote'), members })
+    await modeHeading('Vote')
+    await waitFor(() => {
+      expect(membersMock.fetchProjectMembers).toHaveBeenCalled()
+    })
+    expect(closeButton()).not.toBeInTheDocument()
+  })
+
+  it('a facilitator whose members query is loading or failed sees no Close voting', async () => {
+    const pending = deferred<ProjectMember[] | null>()
+    setup({ board: boardOf('vote') })
+    membersMock.fetchProjectMembers.mockReturnValue(pending.promise)
+    await modeHeading('Vote')
+    expect(closeButton()).not.toBeInTheDocument()
+
+    await act(async () => {
+      pending.reject(new Error('down'))
+      await pending.promise.catch(() => undefined)
+    })
+    expect(closeButton()).not.toBeInTheDocument()
+  })
+
+  it.each([
+    ['collecting', false],
+    ['reveal', true],
+    ['cluster', true],
+    ['discuss', true],
+    ['closed', true],
+  ] as const)('nobody sees Close voting in %s', async (status, isRevealed) => {
+    setup({ board: boardOf(status, isRevealed) })
+    await screen.findByRole('heading', { level: 2 })
+    await waitFor(() => {
+      expect(membersMock.fetchProjectMembers).toHaveBeenCalled()
+    })
+    expect(closeButton()).not.toBeInTheDocument()
+  })
+
+  it('opens the confirmation with its copy and focus on Cancel; Escape and Cancel close it with no call', async () => {
+    setup({ board: boardOf('vote') })
+    const group = await openConfirmation()
+
+    expect(within(group).getByText(CONFIRM)).toBeInTheDocument()
+    const cancel = within(group).getByRole('button', { name: 'Cancel' })
+    await waitFor(() => {
+      expect(cancel).toHaveFocus()
+    })
+    expect(
+      within(group).getByRole('button', { name: 'Close voting' }),
+    ).toBeInTheDocument()
+
+    fireEvent.keyDown(cancel, { key: 'Escape' })
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Close voting' })).toHaveFocus()
+    })
+    expect(screen.queryByRole('group')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close voting' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Close voting' })).toHaveFocus()
+    })
+    expect(cyclesMock.closeVoting).not.toHaveBeenCalled()
+  })
+
+  it('sends one request after a double click and a held Enter, reads "Closing…" while pending, and focuses the Discuss h2 after the refetch', async () => {
+    const pending = deferred<typeof closedRow>()
+    cyclesMock.closeVoting.mockReturnValue(pending.promise)
+    setup({ board: boardOf('vote') })
+    const group = await openConfirmation()
+    const confirm = within(group).getByRole('button', { name: 'Close voting' })
+    fireEvent.click(confirm)
+    fireEvent.click(confirm)
+    fireEvent.keyDown(confirm, { key: 'Enter' })
+    fireEvent.keyDown(confirm, { key: 'Enter', repeat: true })
+    fireEvent.click(confirm)
+
+    await waitFor(() => {
+      expect(
+        within(group).getByRole('button', { name: 'Closing…' }),
+      ).toBeDisabled()
+    })
+    expect(cyclesMock.closeVoting).toHaveBeenCalledTimes(1)
+    expect(cyclesMock.closeVoting).toHaveBeenCalledWith(CYCLE_ID)
+    expect(cyclesMock.advanceStage).not.toHaveBeenCalled()
+    // Nothing is optimistic.
+    expect(
+      screen.getByRole('heading', { level: 2, name: 'Vote' }),
+    ).toBeInTheDocument()
+
+    boardMock.fetchCycleBoard.mockResolvedValue(boardOf('discuss'))
+    await act(async () => {
+      pending.resolve(closedRow)
+      await pending.promise
+    })
+
+    expect(await screen.findByText(SUCCESS)).toBeVisible()
+    const heading = await modeHeading('Discuss')
+    await waitFor(() => {
+      expect(heading).toHaveFocus()
+    })
+    expect(cyclesMock.closeVoting).toHaveBeenCalledTimes(1)
+  })
+
+  it('focuses the Discuss h2 when a Realtime-driven refetch shows discuss before the call resolves', async () => {
+    const pending = deferred<typeof closedRow>()
+    cyclesMock.closeVoting.mockReturnValue(pending.promise)
+    setup({ board: boardOf('vote') })
+    await subscribed()
+    const group = await openConfirmation()
+    fireEvent.click(within(group).getByRole('button', { name: 'Close voting' }))
+    await waitFor(() => {
+      expect(cyclesMock.closeVoting).toHaveBeenCalledTimes(1)
+    })
+
+    boardMock.fetchCycleBoard.mockResolvedValue(boardOf('discuss'))
+    emitEvent()
+    const heading = await modeHeading('Discuss')
+
+    await act(async () => {
+      pending.resolve(closedRow)
+      await pending.promise
+    })
+    expect(await screen.findByText(SUCCESS)).toBeVisible()
+    await waitFor(() => {
+      expect(
+        screen.getByRole('heading', { level: 2, name: 'Discuss' }),
+      ).toHaveFocus()
+    })
+    expect(heading).toBeInTheDocument()
+  })
+
+  it.each<[CyclesErrorCode, string]>([
+    ['stage_out_of_date', 'Voting has already ended for this cycle.'],
+    ['unknown', 'Could not close voting.'],
+  ])(
+    '%s closes the confirmation, shows exactly its message, and re-reads the board and cycle',
+    async (code, message) => {
+      cyclesMock.closeVoting.mockRejectedValue(new CyclesApiError(code))
+      setup({ board: boardOf('vote') })
+      const group = await openConfirmation()
+      const boardsBefore = boardMock.fetchCycleBoard.mock.calls.length
+      const cyclesBefore = cyclesMock.fetchCycle.mock.calls.length
+      fireEvent.click(
+        within(group).getByRole('button', { name: 'Close voting' }),
+      )
+
+      expect(await screen.findByText(message)).toBeVisible()
+      await waitFor(() => {
+        expect(screen.queryByRole('group')).not.toBeInTheDocument()
+      })
+      await waitFor(() => {
+        expect(boardMock.fetchCycleBoard.mock.calls.length).toBeGreaterThan(
+          boardsBefore,
+        )
+        expect(cyclesMock.fetchCycle.mock.calls.length).toBeGreaterThan(
+          cyclesBefore,
+        )
+      })
+      expect(document.body).not.toHaveTextContent(/P0001|42501/)
+    },
+  )
+
+  it('not_project_facilitator shows its message, hides the control, and re-reads the members', async () => {
+    cyclesMock.closeVoting.mockRejectedValue(
+      new CyclesApiError('not_project_facilitator'),
+    )
+    setup({ board: boardOf('vote') })
+    const group = await openConfirmation()
+    await waitFor(() => {
+      expect(membersMock.fetchProjectMembers).toHaveBeenCalledTimes(1)
+    })
+    const reread = deferred<ProjectMember[] | null>()
+    membersMock.fetchProjectMembers.mockReturnValue(reread.promise)
+    fireEvent.click(within(group).getByRole('button', { name: 'Close voting' }))
+
+    expect(
+      await screen.findByText('Only the facilitator can close voting.'),
+    ).toBeVisible()
+    // Hidden at once, while the members are re-read.
+    await waitFor(() => {
+      expect(closeButton()).not.toBeInTheDocument()
+    })
+    expect(membersMock.fetchProjectMembers).toHaveBeenCalledTimes(2)
+
+    // The control follows the re-read's answer.
+    await act(async () => {
+      reread.resolve(asFacilitator)
+      await reread.promise
+    })
+    expect(
+      await screen.findByRole('button', { name: 'Close voting' }),
+    ).toBeInTheDocument()
+  })
+
+  it('not_project_facilitator with a re-read saying member keeps the control hidden', async () => {
+    cyclesMock.closeVoting.mockRejectedValue(
+      new CyclesApiError('not_project_facilitator'),
+    )
+    setup({ board: boardOf('vote') })
+    const group = await openConfirmation()
+    membersMock.fetchProjectMembers.mockResolvedValue(asFormerFacilitator)
+    fireEvent.click(within(group).getByRole('button', { name: 'Close voting' }))
+
+    expect(
+      await screen.findByText('Only the facilitator can close voting.'),
+    ).toBeVisible()
+    await waitFor(() => {
+      expect(membersMock.fetchProjectMembers).toHaveBeenCalledTimes(2)
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(closeButton()).not.toBeInTheDocument()
+  })
+
+  it('not_project_member shows the not-found state with no toast', async () => {
+    cyclesMock.closeVoting.mockRejectedValue(
+      new CyclesApiError('not_project_member'),
+    )
+    setup({ board: boardOf('vote') })
+    const group = await openConfirmation()
+    fireEvent.click(within(group).getByRole('button', { name: 'Close voting' }))
+
+    expect(await screen.findByText(NOT_FOUND)).toBeInTheDocument()
+    expect(screen.queryByText('Sprint twelve retro')).not.toBeInTheDocument()
+    for (const text of [
+      'Only the facilitator can close voting.',
+      'Voting has already ended for this cycle.',
+      'Could not close voting.',
+    ]) {
+      expect(screen.queryByText(text)).not.toBeInTheDocument()
+    }
   })
 })
 

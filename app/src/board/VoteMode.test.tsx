@@ -956,10 +956,10 @@ describe('refetches, focus, and announcements', () => {
 })
 
 describe('stage changes', () => {
-  it.each([
-    ['discuss', 'Discuss', 'The discussion agenda is not available yet.'],
-    ['closed', 'Closed', 'This retrospective is closed.'],
-  ] as const)(
+  // #24: leaving vote for discuss while focus is on a vote control that
+  // vanishes moves focus to the Discuss h2 (DiscussMode.test.tsx); leaving
+  // for closed moves nothing.
+  it.each([['closed', 'Closed', 'This retrospective is closed.']] as const)(
     'leaving vote for %s while idle removes every vote control and does not move focus',
     async (status, heading, copy) => {
       setup({ board: boardOf({ votes: [[PROCESS, 1]] }) })
