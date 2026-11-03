@@ -588,7 +588,7 @@ select is((select proconfig from pg_proc where oid = 'private.record_cycle_stage
 select is(has_function_privilege('anon', 'private.record_cycle_stage_change()', 'EXECUTE'), false, 'anon cannot execute the trigger function');
 select is(has_function_privilege('authenticated', 'private.record_cycle_stage_change()', 'EXECUTE'), false, 'authenticated cannot execute the trigger function');
 select is((select (count(*) filter (where a.grantee = 0))::int from pg_proc p left join lateral aclexplode(p.proacl) a on true where p.oid = 'private.record_cycle_stage_change()'::regprocedure), 0, 'PUBLIC cannot execute the trigger function');
-select matches((select prosrc from pg_proc where oid = 'private.record_cycle_stage_change()'::regprocedure), '''stage_changed'', old\.status, new\.status, \(select auth\.uid\(\)\), ''\{\}''', 'the trigger records stage_changed, old and new status, auth.uid(), and {}');
+select matches((select prosrc from pg_proc where oid = 'private.record_cycle_stage_change()'::regprocedure), '''stage_changed'', old\.status, new\.status, case when old\.status = ''vote'' and new\.status = ''discuss'' then null else \(select auth\.uid\(\)\) end, ''\{\}''', 'the trigger records stage_changed, old and new status, auth.uid() (null for vote -> discuss, #24), and {}');
 select is(has_function_privilege('authenticated', 'private.guard_cycle_event_update()', 'EXECUTE'), false, 'authenticated cannot execute the cycle_events guard');
 
 -- No forbidden table in either function.

@@ -566,7 +566,7 @@ select is(cycle_status_test.st('B', cycle_status_test.id('P1')) - 'status', cycl
 select ok(cycle_status_test.mine_matches('A', 'P1') and cycle_status_test.mine_matches('B', 'P1'), 'vote: my_card_count equals get_my_cards for A and B');
 reset role;
 
-update public.feedback_cycles set status = 'discuss' where id = '33000000-0000-4000-8000-000000000002';
+update public.feedback_cycles set status = 'discuss', voting_closed_at = now() where id = '33000000-0000-4000-8000-000000000002';
 set local role authenticated;
 select is(cycle_status_test.st('A', cycle_status_test.id('P1')) ->> 'status', 'discuss', 'discuss: status is discuss');
 select is((cycle_status_test.st('A', cycle_status_test.id('P1')) ->> 'is_revealed')::boolean, true, 'discuss: is_revealed is true');
