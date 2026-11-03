@@ -8,8 +8,10 @@
 -- Everything runs in one transaction and is rolled back at the end. The seed
 -- user is never used as a fixture.
 --
--- Fixtures: owner and facilitator A, members B and D, non-member C, and E
--- (joins P during vote). P is A's with B and D joined; Q is C's. P0 is a
+-- Fixtures: owner and facilitator A, members B and D, non-member C, E
+-- (joins P during vote), and member F, who never votes (#24: so that A, B,
+-- and D reaching 3 votes each does not close voting automatically). P is
+-- A's with B, D, and F joined; Q is C's. P0 is a
 -- closed cycle of P with cluster Old. P1 (P) is the main cycle: cards from A,
 -- B, and D, moved through reveal and cluster by A, manual clusters X, Y, Z
 -- (with cards) and Empty (no cards) made through the RPCs, and one AI
@@ -23,7 +25,7 @@ create extension if not exists pgtap with schema extensions;
 
 set local search_path = public, extensions;
 
-select plan(149);
+select plan(150);
 
 -- ---------------------------------------------------------------------------
 -- Test-only helpers.
@@ -41,6 +43,7 @@ values
   ('C', '1e000000-0000-4000-8000-000000000003'),
   ('D', '1e000000-0000-4000-8000-000000000004'),
   ('E', '1e000000-0000-4000-8000-000000000005'),
+  ('F', '1e000000-0000-4000-8000-000000000006'),
   ('P', '2e000000-0000-4000-8000-000000000001'),
   ('Q', '2e000000-0000-4000-8000-000000000002'),
   ('P0', '3e000000-0000-4000-8000-000000000000'),
@@ -417,7 +420,8 @@ values
   ('00000000-0000-0000-0000-000000000000', '1e000000-0000-4000-8000-000000000002', 'authenticated', 'authenticated', 'vt-b@example.com', '{"display_name":"Bob"}', '', '', '', ''),
   ('00000000-0000-0000-0000-000000000000', '1e000000-0000-4000-8000-000000000003', 'authenticated', 'authenticated', 'vt-c@example.com', '{"display_name":"Cara"}', '', '', '', ''),
   ('00000000-0000-0000-0000-000000000000', '1e000000-0000-4000-8000-000000000004', 'authenticated', 'authenticated', 'vt-d@example.com', '{"display_name":"Dan"}', '', '', '', ''),
-  ('00000000-0000-0000-0000-000000000000', '1e000000-0000-4000-8000-000000000005', 'authenticated', 'authenticated', 'vt-e@example.com', '{"display_name":"Eve"}', '', '', '', '');
+  ('00000000-0000-0000-0000-000000000000', '1e000000-0000-4000-8000-000000000005', 'authenticated', 'authenticated', 'vt-e@example.com', '{"display_name":"Eve"}', '', '', '', ''),
+  ('00000000-0000-0000-0000-000000000000', '1e000000-0000-4000-8000-000000000006', 'authenticated', 'authenticated', 'vt-f@example.com', '{"display_name":"Fay"}', '', '', '', '');
 
 insert into public.projects (id, name, owner_id)
 values
@@ -427,7 +431,8 @@ values
 insert into public.project_members (project_id, user_id, role)
 values
   ('2e000000-0000-4000-8000-000000000001', '1e000000-0000-4000-8000-000000000002', 'member'),
-  ('2e000000-0000-4000-8000-000000000001', '1e000000-0000-4000-8000-000000000004', 'member');
+  ('2e000000-0000-4000-8000-000000000001', '1e000000-0000-4000-8000-000000000004', 'member'),
+  ('2e000000-0000-4000-8000-000000000001', '1e000000-0000-4000-8000-000000000006', 'member');
 
 -- P0: an earlier, closed cycle of P with one cluster.
 insert into public.feedback_cycles (id, project_id, title, week_start, status, revealed_at, closed_at)
@@ -765,7 +770,8 @@ select is(vt.mine(vt.board('A')), jsonb_build_object('my_votes', vt.mv(array['X'
 select is(vt.shared(vt.board('A')), vt.shared(vt.board('B')), 'A''s and B''s boards differ only in is_mine, my_votes, and votes_remaining');
 select is(vt.shared(vt.board('D')), vt.shared(vt.board('B')), 'D''s and B''s boards differ only in is_mine, my_votes, and votes_remaining');
 
-select is(array[vt.totals('A'), vt.totals('B'), vt.totals('D')], array[vt.e('voting_not_closed'), vt.e('voting_not_closed'), vt.e('voting_not_closed')], 'vote with every member at 3 votes: A, B, D get voting_not_closed');
+select is(array[vt.totals('A'), vt.totals('B'), vt.totals('D')], array[vt.e('voting_not_closed'), vt.e('voting_not_closed'), vt.e('voting_not_closed')], 'vote with A, B, and D at 3 votes: A, B, D get voting_not_closed');
+select is(vt.board('A') ->> 'status', 'vote', 'with A, B, and D at 3 votes and F at 0, P1 is still in vote (#24 closes only when every member is at 3)');
 
 -- transfer_facilitator during vote changes no vote or budget.
 select vt.snap('mine A', vt.mine(vt.board('A')));

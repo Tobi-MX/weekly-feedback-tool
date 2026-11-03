@@ -781,7 +781,7 @@ select ok(board_test.strip_mine(board_test.board('B', 'P1')) = board_test.strip_
 select is(board_test.denials('P1'), '{}'::text[], 'vote: every denied case gets exactly not_project_member');
 reset role;
 
-update public.feedback_cycles set status = 'discuss' where id = '35000000-0000-4000-8000-000000000002';
+update public.feedback_cycles set status = 'discuss', voting_closed_at = now() where id = '35000000-0000-4000-8000-000000000002';
 set local role authenticated;
 select is(board_test.problems('A', 'P1', board_test.board('A', 'P1')), '{}'::text[], 'discuss: A''s board meets every rule');
 select is(board_test.problems('B', 'P1', board_test.board('B', 'P1')), '{}'::text[], 'discuss: B''s board meets every rule');

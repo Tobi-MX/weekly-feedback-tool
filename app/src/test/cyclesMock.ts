@@ -3,6 +3,7 @@ import type {
   AdvanceFromStatus,
   AdvancedStage,
   ClosedCycle,
+  ClosedVoting,
   CycleDetail,
   CycleEventsHandlers,
   CycleEventsStatus,
@@ -57,6 +58,7 @@ export const cyclesMock = {
     vi.fn<
       (cycleId: string, fromStatus: AdvanceFromStatus) => Promise<AdvancedStage>
     >(),
+  closeVoting: vi.fn<(cycleId: string) => Promise<ClosedVoting>>(),
   subscribeToCycleEvents:
     vi.fn<(cycleId: string, handlers: CycleEventsHandlers) => () => void>(),
 
@@ -103,6 +105,9 @@ export const cyclesMock = {
       .mockReset()
       .mockRejectedValue(new CyclesApiError('unknown'))
     cyclesMock.advanceStage
+      .mockReset()
+      .mockRejectedValue(new CyclesApiError('unknown'))
+    cyclesMock.closeVoting
       .mockReset()
       .mockRejectedValue(new CyclesApiError('unknown'))
     subscriptions.length = 0

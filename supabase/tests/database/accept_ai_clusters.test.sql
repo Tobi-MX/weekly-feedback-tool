@@ -611,7 +611,7 @@ set local role authenticated;
 select ak_test.advance('A', 'cluster');
 select is(ak_test.accept('A'), ak_test.e('cycle_not_clustering'), 'vote: the facilitator gets cycle_not_clustering');
 reset role;
-update public.feedback_cycles set status = 'discuss' where id = ak_test.id('P1');
+update public.feedback_cycles set status = 'discuss', voting_closed_at = now() where id = ak_test.id('P1');
 set local role authenticated;
 select is(ak_test.accept('A'), ak_test.e('cycle_not_clustering'), 'discuss: the facilitator gets cycle_not_clustering');
 select ak_test.close('A');

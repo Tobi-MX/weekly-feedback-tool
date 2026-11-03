@@ -4,6 +4,7 @@ import { cycleBoardQueryKey } from '@/board/boardKeys'
 import {
   advanceStage,
   closeCycle,
+  closeVoting,
   createCycle,
   fetchCycle,
   fetchCycleStatus,
@@ -193,6 +194,20 @@ export function useAdvanceStage(cycleId: string) {
   return useMutation({
     mutationFn: (fromStatus: AdvanceFromStatus) =>
       advanceStage(cycleId, fromStatus),
+    onSettled: () => invalidate(),
+  })
+}
+
+/**
+ * The board's Close voting control (#24). Like `useAdvanceStage`, it settles
+ * only after the board and cycle re-reads it starts have finished; nothing
+ * is optimistic.
+ */
+export function useCloseVoting(cycleId: string) {
+  const invalidate = useInvalidateBoardStage(cycleId)
+
+  return useMutation({
+    mutationFn: () => closeVoting(cycleId),
     onSettled: () => invalidate(),
   })
 }

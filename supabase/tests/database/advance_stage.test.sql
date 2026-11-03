@@ -564,7 +564,7 @@ select is(advance_test.state(advance_test.id('P1')), advance_test.snapped('P1 vo
 -- ---------------------------------------------------------------------------
 -- P1 discuss (reached as postgres, since close_voting is #24).
 -- ---------------------------------------------------------------------------
-update public.feedback_cycles set status = 'discuss' where id = '36000000-0000-4000-8000-000000000001';
+update public.feedback_cycles set status = 'discuss', voting_closed_at = now() where id = '36000000-0000-4000-8000-000000000001';
 select advance_test.snap('P1 discuss', advance_test.state(advance_test.id('P1')));
 set local role authenticated;
 select is(advance_test.adv_err('A', advance_test.id('P1'), 'reveal'), advance_test.denied('stage_out_of_date'), '''reveal'' on a discuss cycle gets stage_out_of_date');

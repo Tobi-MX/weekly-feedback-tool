@@ -1,6 +1,8 @@
 /**
  * Stable error codes raised by `create_cycle`, `close_cycle`,
- * `start_retrospective`, `advance_stage`, and `get_cycle_status` (which
+ * `start_retrospective`, `advance_stage`, `close_voting` (#24:
+ * `not_project_member`, `not_project_facilitator`, `stage_out_of_date`), and
+ * `get_cycle_status` (which
  * raises only `not_project_member`). The database
  * raises them as the exception message; nothing else from a Postgres error is
  * ever kept, shown, or logged.
@@ -85,5 +87,22 @@ export function advanceStageErrorMessage(code: CyclesErrorCode): string {
       return 'This stage cannot be changed from the board.'
     default:
       return 'Could not change the stage.'
+  }
+}
+
+/**
+ * The toast when closing voting fails (#24), or null for
+ * `not_project_member`, which shows the board's not-found state instead.
+ */
+export function closeVotingErrorMessage(code: CyclesErrorCode): string | null {
+  switch (code) {
+    case 'not_project_member':
+      return null
+    case 'not_project_facilitator':
+      return 'Only the facilitator can close voting.'
+    case 'stage_out_of_date':
+      return 'Voting has already ended for this cycle.'
+    default:
+      return 'Could not close voting.'
   }
 }

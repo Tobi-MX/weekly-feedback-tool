@@ -4,23 +4,36 @@ import { Button } from '@/components/ui/button'
 import type { AdvanceFromStatus } from '@/cycles/cyclesApi'
 import {
   advanceStageErrorMessage,
+  closeVotingErrorMessage,
   cyclesErrorCodeOf,
   type CyclesErrorCode,
 } from '@/cycles/cyclesErrors'
-import { useAdvanceStage } from '@/cycles/useCycles'
+import { useAdvanceStage, useCloseVoting } from '@/cycles/useCycles'
 import { cn } from '@/lib/utils'
+
+/**
+ * The stage the control leaves: reveal and cluster through `advance_stage`
+ * (#16), vote through `close_voting` (#24).
+ */
+export type StageControlFrom = AdvanceFromStatus | 'vote'
 
 interface ControlCopy {
   readonly action: string
   readonly confirm: string
+  readonly pending: string
   readonly success: string
 }
 
-const COPY: Record<AdvanceFromStatus, ControlCopy> = {
+export const CLOSE_VOTING_CONFIRM =
+  'Close voting for everyone? Members who have not used all their votes cannot vote any more, and the results are shown to the whole team. You cannot reopen voting.'
+export const CLOSE_VOTING_SUCCESS = 'Voting closed. The board moved to Discuss.'
+
+const COPY: Record<StageControlFrom, ControlCopy> = {
   reveal: {
     action: 'Start clustering',
     confirm:
       'Move everyone to the Cluster stage? You cannot go back to Reveal.',
+    pending: 'Moving…',
     success: 'The board moved to Cluster.',
   },
   // #17: the board passes its cluster and ungrouped-card counts as `note`.
@@ -28,8 +41,27 @@ const COPY: Record<AdvanceFromStatus, ControlCopy> = {
     action: 'Start voting',
     confirm:
       'Move everyone to the Vote stage? Clusters cannot be changed once voting starts, and you cannot go back to Cluster.',
+    pending: 'Moving…',
     success: 'The board moved to Vote.',
   },
+  // #24: the facilitator closes voting early.
+  vote: {
+    action: 'Close voting',
+    confirm: CLOSE_VOTING_CONFIRM,
+    pending: 'Closing…',
+    success: CLOSE_VOTING_SUCCESS,
+  },
+}
+
+/** The toast for a failed call, or null for none (the not-found state). */
+function failureMessage(
+  from: StageControlFrom,
+  code: CyclesErrorCode,
+): string | null {
+  if (from === 'vote') {
+    return closeVotingErrorMessage(code)
+  }
+  return code === 'not_project_member' ? null : advanceStageErrorMessage(code)
 }
 
 const wrapText = 'min-w-0 break-words [overflow-wrap:anywhere]'
@@ -37,7 +69,7 @@ const wrapText = 'min-w-0 break-words [overflow-wrap:anywhere]'
 export interface AdvanceControlProps {
   readonly cycleId: string
   /** The stage currently shown, which is the one the call leaves. */
-  readonly from: AdvanceFromStatus
+  readonly from: StageControlFrom
   /** Shown before the confirmation's own copy (the counts for "Start voting"). */
   readonly note?: string
   /** Called when the request is sent, before any answer or refetch. */
@@ -52,10 +84,10 @@ export interface AdvanceControlProps {
 }
 
 /**
- * The facilitator's "Start clustering" / "Start voting" control with #10's
- * inline confirmation. Focus moves to Cancel when it opens and back to the
- * trigger when it closes. Nothing is optimistic: the mode changes only when
- * the board's refetch returns the new stage.
+ * The facilitator's "Start clustering" / "Start voting" / "Close voting"
+ * control with #10's inline confirmation. Focus moves to Cancel when it
+ * opens and back to the trigger when it closes. Nothing is optimistic: the
+ * mode changes only when the board's refetch returns the new stage.
  */
 export function AdvanceControl({
   cycleId,
@@ -66,7 +98,10 @@ export function AdvanceControl({
   onFailed,
 }: AdvanceControlProps) {
   const copy = COPY[from]
-  const mutation = useAdvanceStage(cycleId)
+  const advance = useAdvanceStage(cycleId)
+  const closeVoting = useCloseVoting(cycleId)
+  const send = (): Promise<unknown> =>
+    from === 'vote' ? closeVoting.mutateAsync() : advance.mutateAsync(from)
   const [confirming, setConfirming] = useState(false)
   // A synchronous second click or Enter must not send a second request.
   const pendingRef = useRef(false)
@@ -95,8 +130,7 @@ export function AdvanceControl({
     }
     pendingRef.current = true
     onStart()
-    mutation
-      .mutateAsync(from)
+    send()
       .then(() => {
         toast.success(copy.success)
         onAdvanced()
@@ -104,8 +138,9 @@ export function AdvanceControl({
       })
       .catch((error: unknown) => {
         const code = cyclesErrorCodeOf(error)
-        if (code !== 'not_project_member') {
-          toast.error(advanceStageErrorMessage(code))
+        const message = failureMessage(from, code)
+        if (message !== null) {
+          toast.error(message)
         }
         close()
         onFailed(code)
@@ -131,7 +166,7 @@ export function AdvanceControl({
     )
   }
 
-  const pending = mutation.isPending
+  const pending = from === 'vote' ? closeVoting.isPending : advance.isPending
   return (
     <div
       role="group"
@@ -159,7 +194,7 @@ export function AdvanceControl({
           Cancel
         </Button>
         <Button type="button" disabled={pending} onClick={confirm}>
-          {pending ? 'Moving…' : copy.action}
+          {pending ? copy.pending : copy.action}
         </Button>
       </div>
     </div>

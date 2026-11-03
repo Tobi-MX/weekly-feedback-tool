@@ -417,9 +417,22 @@ describe('cluster mode layout', () => {
     ).toBeInTheDocument()
   })
 
-  // Vote mode (#23) replaces the flat card list; VoteMode.test.tsx checks it
-  // has no cluster form, Rename, or Delete.
-  it.each(['reveal', 'discuss', 'closed'] as const)(
+  // Vote mode (#23) and the discuss agenda (#24) replace the flat card list;
+  // VoteMode.test.tsx checks vote mode has no cluster form, Rename, or Delete.
+  it('in discuss there is no cluster form, Rename, or Delete, and the agenda replaces the card list', async () => {
+    setup({ board: boardOf('discuss') })
+    await screen.findByRole('heading', { level: 2 })
+
+    expect(screen.queryByTestId('cluster-board')).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('form', { name: 'New cluster' }),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Rename|Delete/ })).toBeNull()
+    expect(screen.queryByText(INTRO)).not.toBeInTheDocument()
+    expect(await screen.findByTestId('discuss-board')).toBeInTheDocument()
+  })
+
+  it.each(['reveal', 'closed'] as const)(
     'in %s there is no cluster form, Rename, or Delete, and the card list is unchanged',
     async (status) => {
       setup({ board: boardOf(status) })

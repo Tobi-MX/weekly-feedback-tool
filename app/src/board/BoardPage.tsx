@@ -1,11 +1,19 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '@/auth/AuthProvider'
 import { focusRing } from '@/cards/CardForms'
 import { NOT_FOUND_MESSAGE } from '@/cards/cardsErrors'
 import { Button } from '@/components/ui/button'
-import type { AdvanceFromStatus, CycleDetail } from '@/cycles/cyclesApi'
+import type { CycleDetail } from '@/cycles/cyclesApi'
 import type { CyclesErrorCode } from '@/cycles/cyclesErrors'
 import { cycleStatusLabel, type CycleStatus } from '@/cycles/cycleStatus'
 import { formatWeekStart } from '@/cycles/cycleWeek'
@@ -17,7 +25,7 @@ import {
   projectMembersQueryKey,
   useProjectMembersQuery,
 } from '@/projects/useMembers'
-import { AdvanceControl } from './AdvanceControl'
+import { AdvanceControl, type StageControlFrom } from './AdvanceControl'
 import type { CycleBoard } from './boardApi'
 import { boardErrorCodeOf } from './boardErrors'
 import {
@@ -32,6 +40,7 @@ import {
   CLUSTER_READ_ONLY_INTRO,
   ClusterMode,
 } from './ClusterMode'
+import { DiscussMode } from './DiscussMode'
 import { StageIndicator } from './StageIndicator'
 import { VoteMode } from './VoteMode'
 import { useAiClusteringRun, type AiClusteringRun } from './useAiClustering'
@@ -40,6 +49,7 @@ import {
   cycleBoardQueryKey,
   useCycleBoardQuery,
 } from './useBoard'
+import { voteTotalsQueryKey } from './useVoteTotals'
 
 export const BOARD_LOAD_ERROR_MESSAGE = 'Could not load the board.'
 export const LIVE_UNAVAILABLE_MESSAGE =
@@ -110,14 +120,29 @@ function BoardHeader({
   )
 }
 
-/** A plain-text placeholder for a mode a later task builds. */
-function Placeholder({ text }: { text: string }) {
+/**
+ * Reports, as it unmounts, whether focus was inside it. Its layout-effect
+ * cleanup runs before React removes its DOM, so a focused vote button that
+ * is about to vanish still counts (#24's vanished-control rule).
+ */
+function FocusWatch({
+  onUnmount,
+  children,
+}: {
+  onUnmount: (hadFocus: boolean) => void
+  children: ReactNode
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const node = ref.current
+    return () => {
+      const active = document.activeElement
+      onUnmount(node !== null && active !== null && node.contains(active))
+    }
+  }, [onUnmount])
   return (
-    <div
-      data-testid="mode-placeholder"
-      className="rounded-lg border border-dashed bg-card p-4 text-sm text-card-foreground"
-    >
-      {text}
+    <div ref={ref} className="min-w-0">
+      {children}
     </div>
   )
 }
@@ -129,14 +154,18 @@ interface ModeProps {
   readonly onAdvanceStart: (target: CycleStatus) => void
   readonly onAdvanced: (target: CycleStatus) => void
   readonly onAdvanceFailed: (code: CyclesErrorCode) => void
+  readonly onCloseVotingFailed: (code: CyclesErrorCode) => void
+  /** Vote mode unmounted; whether focus was inside it at that moment. */
+  readonly onVoteModeUnmount: (hadFocus: boolean) => void
   readonly onLostAccess: () => void
   readonly onNotFacilitator: () => void
   readonly ai: AiClusteringRun
 }
 
-const ADVANCE_TARGET: Record<AdvanceFromStatus, CycleStatus> = {
+const ADVANCE_TARGET: Record<StageControlFrom, CycleStatus> = {
   reveal: 'cluster',
   cluster: 'vote',
+  vote: 'discuss',
 }
 
 /** The h2, copy, control, and cards of the mode the server reports. */
@@ -147,6 +176,8 @@ function BoardMode({
   onAdvanceStart,
   onAdvanced,
   onAdvanceFailed,
+  onCloseVotingFailed,
+  onVoteModeUnmount,
   onLostAccess,
   onNotFacilitator,
   ai,
@@ -154,8 +185,7 @@ function BoardMode({
   const { status, isRevealed, cards } = board
   let heading: string
   let intro: React.ReactNode = null
-  let placeholder: string | null = null
-  let from: AdvanceFromStatus | null = null
+  let from: StageControlFrom | null = null
 
   switch (status) {
     case 'collecting':
@@ -192,12 +222,14 @@ function BoardMode({
       from = 'cluster'
       break
     case 'vote':
-      // Vote mode renders its own intro, notice, and counter (#23).
+      // Vote mode renders its own intro, notice, and counter (#23). The
+      // facilitator's Close voting control comes before it (#24).
       heading = 'Vote'
+      from = 'vote'
       break
     case 'discuss':
+      // The ranked agenda renders its own intro (#24).
       heading = 'Discuss'
-      placeholder = 'The discussion agenda is not available yet.'
       break
     case 'closed':
       heading = 'Closed'
@@ -224,7 +256,6 @@ function BoardMode({
         </h2>
         {intro}
       </div>
-      {placeholder !== null ? <Placeholder text={placeholder} /> : null}
       {from !== null && isFacilitator ? (
         <AdvanceControl
           key={from}
@@ -237,12 +268,16 @@ function BoardMode({
           onAdvanced={() => {
             onAdvanced(ADVANCE_TARGET[from])
           }}
-          onFailed={onAdvanceFailed}
+          onFailed={from === 'vote' ? onCloseVotingFailed : onAdvanceFailed}
         />
       ) : null}
       {/* Cards are shown only once revealed, never the caller's own before. */}
       {status === 'vote' ? (
-        <VoteMode board={board} onLostAccess={onLostAccess} />
+        <FocusWatch onUnmount={onVoteModeUnmount}>
+          <VoteMode board={board} onLostAccess={onLostAccess} />
+        </FocusWatch>
+      ) : status === 'discuss' ? (
+        <DiscussMode board={board} onLostAccess={onLostAccess} />
       ) : status === 'cluster' ? (
         <ClusterMode
           board={board}
@@ -291,6 +326,10 @@ function BoardScreen({ cycleId }: { cycleId: string }) {
   // The status the page last rendered, for the case where the board already
   // shows the target when the call resolves.
   const shownStatusRef = useRef<CycleStatus | undefined>(undefined)
+  // Set when vote mode unmounts while focus is inside it (#24's
+  // vanished-control rule): once the board shows discuss, focus that fell to
+  // <body> moves to the Discuss h2.
+  const voteFocusLostRef = useRef(false)
 
   const refetchInterval = polling ? BOARD_POLL_INTERVAL_MS : false
   const cycleQuery = useCycleQuery(cycleId, validId && !lostAccess, {
@@ -336,6 +375,10 @@ function BoardScreen({ cycleId }: { cycleId: string }) {
     })
     void queryClient.invalidateQueries({
       queryKey: cycleQueryKey(userId, cycleId),
+    })
+    // Only an active (discuss) totals query is refetched.
+    void queryClient.invalidateQueries({
+      queryKey: voteTotalsQueryKey(userId, cycleId),
     })
     if (projectId !== undefined) {
       void queryClient.invalidateQueries({
@@ -411,8 +454,23 @@ function BoardScreen({ cycleId }: { cycleId: string }) {
     if (request?.succeeded === true && request.target === boardStatus) {
       focusRequestRef.current = null
       headingRef.current?.focus()
+      return
+    }
+    if (voteFocusLostRef.current && boardStatus !== 'vote') {
+      voteFocusLostRef.current = false
+      const active = document.activeElement
+      if (
+        boardStatus === 'discuss' &&
+        (active === null || active === document.body || !active.isConnected)
+      ) {
+        headingRef.current?.focus()
+      }
     }
   }, [boardStatus])
+
+  const onVoteModeUnmount = useCallback((hadFocus: boolean) => {
+    voteFocusLostRef.current = hadFocus
+  }, [])
 
   const onAdvanceStart = useCallback((target: CycleStatus) => {
     focusRequestRef.current = { target, succeeded: false }
@@ -438,6 +496,20 @@ function BoardScreen({ cycleId }: { cycleId: string }) {
       // Every failure re-reads the board and cycle when the mutation settles.
     },
     [refetchMembers],
+  )
+
+  // Close voting (#24): not_project_facilitator hides the control at once
+  // and re-reads the members; the control then follows that answer.
+  const onCloseVotingFailed = useCallback(
+    (code: CyclesErrorCode) => {
+      focusRequestRef.current = null
+      if (code === 'not_project_member') {
+        setLostAccess(true)
+      } else if (code === 'not_project_facilitator') {
+        onNotFacilitator()
+      }
+    },
+    [onNotFacilitator],
   )
 
   const loseAccess = useCallback(() => {
@@ -508,6 +580,8 @@ function BoardScreen({ cycleId }: { cycleId: string }) {
           onAdvanceStart={onAdvanceStart}
           onAdvanced={onAdvanced}
           onAdvanceFailed={onAdvanceFailed}
+          onCloseVotingFailed={onCloseVotingFailed}
+          onVoteModeUnmount={onVoteModeUnmount}
           onLostAccess={loseAccess}
           onNotFacilitator={onNotFacilitator}
           ai={ai}
