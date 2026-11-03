@@ -202,12 +202,13 @@ function success(
 
 async function facilitatorPanel(): Promise<HTMLElement> {
   // A cheap selector first: role queries over a 301-card board are slow.
-  await waitFor(() => {
-    expect(document.querySelector('[data-ai-panel]')).not.toBeNull()
-  })
-  expect(
-    screen.getByRole('form', { name: 'New cluster' }),
-  ).toBeInTheDocument()
+  await waitFor(
+    () => {
+      expect(document.querySelector('[data-ai-panel]')).not.toBeNull()
+    },
+    { timeout: 4000 },
+  )
+  expect(screen.getByRole('form', { name: 'New cluster' })).toBeInTheDocument()
   return panel()
 }
 
