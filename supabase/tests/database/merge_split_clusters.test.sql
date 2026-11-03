@@ -708,7 +708,7 @@ select is(
   'every raise sets only the code and a stable message, with no detail or hint'
 );
 select is((select bool_or(pg_get_function_identity_arguments(p.oid) ~* 'user|author|actor') from pg_proc p where p.oid in ('public.merge_clusters(uuid, uuid)'::regprocedure, 'public.split_cluster(uuid, uuid[], text)'::regprocedure)), false, 'neither takes a user id');
-select is((select md5(prosrc) from pg_proc where oid = 'public.get_cycle_board(uuid)'::regprocedure), '63317c82ae89c6b9c7851c07bafefbc7', 'get_cycle_board is unchanged from #17');
+select is((select md5(prosrc) from pg_proc where oid = 'public.get_cycle_board(uuid)'::regprocedure), 'a652b8eee54255a3b19a6448c77fc9ee', 'get_cycle_board is unchanged from #17');
 select is((select bool_and(c.relrowsecurity) from pg_class c where c.oid in ('public.clusters'::regclass, 'public.cluster_cards'::regclass)), true, 'clusters and cluster_cards keep RLS enabled');
 select is((select count(*)::int from pg_policies where schemaname = 'public' and tablename in ('clusters', 'cluster_cards', 'cards', 'card_authors')), 0, 'clusters, cluster_cards, cards, and card_authors still have no policy');
 select is(

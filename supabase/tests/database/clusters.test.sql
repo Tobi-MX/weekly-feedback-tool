@@ -1009,7 +1009,7 @@ select cluster_test.snap('board A', cluster_test.board('A', cluster_test.id('P1'
 select cluster_test.snap('board B', cluster_test.board('B', cluster_test.id('P1')));
 select cluster_test.snap('board D', cluster_test.board('D', cluster_test.id('P1')));
 reset role;
-select is(cluster_test.keys(cluster_test.snapped('board A')), array['cards', 'clusters', 'cycle_id', 'is_revealed', 'status'], 'the response has exactly five top-level keys');
+select is(cluster_test.keys(cluster_test.snapped('board A')), array['cards', 'clusters', 'cycle_id', 'is_revealed', 'my_votes', 'status', 'votes_remaining'], 'the response has exactly seven top-level keys');
 select is(
   (select count(*)::int from jsonb_array_elements(cluster_test.snapped('board A') -> 'clusters') c where cluster_test.keys(c) is distinct from array['card_ids', 'cluster_id', 'name', 'source']),
   0,
