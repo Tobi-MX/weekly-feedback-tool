@@ -1,5 +1,10 @@
 import type { CycleStatus } from '@/cycles/cycleStatus'
 import type { BoardCard, BoardCluster, CycleBoard } from './boardApi'
+import type {
+  CycleDiscussion,
+  DiscussionNote,
+  DiscussionStatus,
+} from './discussionApi'
 import type { VoteTotal } from './voteTotalsApi'
 
 /** The retrospective stages the indicator shows, in order. */
@@ -125,4 +130,67 @@ export function rankedAgenda(
     items.push({ cluster, totalVotes: total.totalVotes })
   }
   return items
+}
+
+/** One topic's discussion: its status and its notes in server order. */
+export interface TopicDiscussion {
+  readonly status: DiscussionStatus
+  readonly notes: readonly DiscussionNote[]
+}
+
+/** The discussion split by topic (#25). */
+export interface DiscussionByTopic {
+  /** Keyed by cluster id; one entry per board cluster. */
+  readonly topics: ReadonlyMap<string, TopicDiscussion>
+  /** Notes with no cluster, in server order. */
+  readonly general: readonly DiscussionNote[]
+}
+
+/**
+ * Joins `get_cycle_discussion` to the board's clusters. Each topic keeps its
+ * notes in the server's order, and notes with no cluster are the general
+ * notes. Returns null (shown as a discussion load error) when the statuses'
+ * cluster ids differ from the board's, an id repeats, or a note points at a
+ * cluster that is not on the board.
+ */
+export function discussionByTopic(
+  board: Pick<CycleBoard, 'clusters'>,
+  discussion: Pick<CycleDiscussion, 'statuses' | 'notes'>,
+): DiscussionByTopic | null {
+  const boardIds = new Set(board.clusters.map((cluster) => cluster.clusterId))
+  if (
+    boardIds.size !== board.clusters.length ||
+    discussion.statuses.length !== board.clusters.length
+  ) {
+    return null
+  }
+  const notesByTopic = new Map<string, DiscussionNote[]>()
+  const statusByTopic = new Map<string, DiscussionStatus>()
+  for (const status of discussion.statuses) {
+    if (
+      !boardIds.has(status.clusterId) ||
+      statusByTopic.has(status.clusterId)
+    ) {
+      return null
+    }
+    statusByTopic.set(status.clusterId, status.discussionStatus)
+    notesByTopic.set(status.clusterId, [])
+  }
+  const general: DiscussionNote[] = []
+  for (const note of discussion.notes) {
+    if (note.clusterId === null) {
+      general.push(note)
+      continue
+    }
+    const list = notesByTopic.get(note.clusterId)
+    if (list === undefined) {
+      return null
+    }
+    list.push(note)
+  }
+  const topics = new Map<string, TopicDiscussion>()
+  for (const [clusterId, status] of statusByTopic) {
+    topics.set(clusterId, { status, notes: notesByTopic.get(clusterId) ?? [] })
+  }
+  return { topics, general }
 }

@@ -8,6 +8,7 @@ import { resetAuthMock } from './test/authMock'
 import { resetBoardMock } from './test/boardMock'
 import { resetCardsMock } from './test/cardsMock'
 import { resetCyclesMock } from './test/cyclesMock'
+import { resetDiscussionMock } from './test/discussionMock'
 import { resetMembersMock } from './test/membersMock'
 import { resetProfileMock } from './test/profileMock'
 import { resetProjectsMock } from './test/projectsMock'
@@ -90,6 +91,22 @@ vi.mock('./board/voteTotalsApi', async (importOriginal) => {
   return { ...actual, fetchVoteTotals: mock.fetchVoteTotals }
 })
 
+// The discussion read and writes (#25) use the same pattern, so no test
+// reaches get_cycle_discussion or a discussion write. The constants and the
+// code-point helper stay real.
+vi.mock('./board/discussionApi', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./board/discussionApi')>()
+  const { discussionMock: mock } = await import('./test/discussionMock')
+  return {
+    ...actual,
+    fetchDiscussion: mock.fetchDiscussion,
+    setDiscussionStatus: mock.setDiscussionStatus,
+    addNote: mock.addNote,
+    updateNote: mock.updateNote,
+    deleteNote: mock.deleteNote,
+  }
+})
+
 // jsdom lacks a few browser APIs that Radix and sonner feature-detect.
 if (typeof globalThis.ResizeObserver === 'undefined') {
   globalThis.ResizeObserver = class ResizeObserver {
@@ -132,6 +149,7 @@ beforeEach(() => {
   resetBoardMock()
   resetAiClusteringMock()
   resetVotesMock()
+  resetDiscussionMock()
   // Sonner keeps its toast queue outside React, so dismiss it between tests.
   toast.dismiss()
   // The QueryClient is a singleton in the app; reset it between tests so one
