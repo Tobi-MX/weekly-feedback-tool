@@ -33,6 +33,7 @@ import {
   ClusterMode,
 } from './ClusterMode'
 import { StageIndicator } from './StageIndicator'
+import { VoteMode } from './VoteMode'
 import { useAiClusteringRun, type AiClusteringRun } from './useAiClustering'
 import {
   BOARD_POLL_INTERVAL_MS,
@@ -191,8 +192,8 @@ function BoardMode({
       from = 'cluster'
       break
     case 'vote':
+      // Vote mode renders its own intro, notice, and counter (#23).
       heading = 'Vote'
-      placeholder = 'Voting is not available yet.'
       break
     case 'discuss':
       heading = 'Discuss'
@@ -240,7 +241,9 @@ function BoardMode({
         />
       ) : null}
       {/* Cards are shown only once revealed, never the caller's own before. */}
-      {status === 'cluster' ? (
+      {status === 'vote' ? (
+        <VoteMode board={board} onLostAccess={onLostAccess} />
+      ) : status === 'cluster' ? (
         <ClusterMode
           board={board}
           isFacilitator={isFacilitator}

@@ -11,6 +11,7 @@ import { resetCyclesMock } from './test/cyclesMock'
 import { resetMembersMock } from './test/membersMock'
 import { resetProfileMock } from './test/profileMock'
 import { resetProjectsMock } from './test/projectsMock'
+import { resetVotesMock } from './test/votesMock'
 
 // Every test file gets the shared auth-module mock. Tests configure results
 // through `authMock`; no test needs a Supabase stack or app/.env.local.
@@ -74,6 +75,13 @@ vi.mock('./board/aiClusteringApi', async () => {
   return mock
 })
 
+// The two vote writes (#23) use the same pattern, so no test reaches
+// cast_vote or remove_vote.
+vi.mock('./board/votesApi', async () => {
+  const { votesMock: mock } = await import('./test/votesMock')
+  return mock
+})
+
 // jsdom lacks a few browser APIs that Radix and sonner feature-detect.
 if (typeof globalThis.ResizeObserver === 'undefined') {
   globalThis.ResizeObserver = class ResizeObserver {
@@ -115,6 +123,7 @@ beforeEach(() => {
   resetCardsMock()
   resetBoardMock()
   resetAiClusteringMock()
+  resetVotesMock()
   // Sonner keeps its toast queue outside React, so dismiss it between tests.
   toast.dismiss()
   // The QueryClient is a singleton in the app; reset it between tests so one

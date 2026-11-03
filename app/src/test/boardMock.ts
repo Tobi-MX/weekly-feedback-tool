@@ -4,14 +4,6 @@ import type { SavedCluster } from '../board/clustersApi'
 import { ClustersApiError } from '../board/clusterErrors'
 
 /**
- * Shared mock for `src/board/boardApi.ts` and `src/board/clustersApi.ts`.
- * Every test gets it through `setupTests`, so no test opens a network
- * connection for board data, cluster writes (merge and split included), or
- * card moves. By default the board resolves
- * `null` (not found), like `fetchCycle`, and every cluster write fails with
- * `unknown` until a test configures it.
- */
-/**
  * The caller's vote fields of a board where the caller has not voted (#22):
  * no own votes and the full budget. Board fixtures spread this.
  */
@@ -20,7 +12,17 @@ export const NO_VOTES: Pick<CycleBoard, 'myVotes' | 'votesRemaining'> = {
   votesRemaining: 3,
 }
 
+/**
+ * Shared mock for `src/board/boardApi.ts` and `src/board/clustersApi.ts`.
+ * Every test gets it through `setupTests`, so no test opens a network
+ * connection for board data, cluster writes (merge and split included), or
+ * card moves. By default the board resolves
+ * `null` (not found), like `fetchCycle`, and every cluster write fails with
+ * `unknown` until a test configures it.
+ */
 export const boardMock = {
+  // boardApi's constant, which the vote modules import (#23).
+  VOTES_PER_MEMBER: 3,
   fetchCycleBoard: vi.fn<(cycleId: string) => Promise<CycleBoard | null>>(),
   createCluster:
     vi.fn<(cycleId: string, name: string) => Promise<SavedCluster>>(),

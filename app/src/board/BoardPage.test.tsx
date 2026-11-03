@@ -19,6 +19,7 @@ import { profileMock } from '../test/profileMock'
 import { renderApp } from '../test/renderApp'
 import type { BoardCard, CycleBoard } from './boardApi'
 import { BoardApiError } from './boardErrors'
+import { VOTE_INTRO, VOTE_TOTALS_HIDDEN } from './VoteMode'
 
 const CYCLE_ID = '30000000-0000-4000-8000-000000000001'
 const PROJECT_ID = '10000000-0000-4000-8000-000000000001'
@@ -237,7 +238,9 @@ describe('board modes', () => {
       'Group related cards into clusters. Only you, as the facilitator, can change clusters until voting starts.',
       'Start voting',
     ],
-    ['vote', true, 'Vote', 'Voting is not available yet.', null],
+    // #23: vote mode replaces the placeholder. With no clusters it has no
+    // vote control (VoteMode.test.tsx covers the clusters).
+    ['vote', true, 'Vote', VOTE_INTRO, null],
     [
       'discuss',
       true,
@@ -455,7 +458,7 @@ describe('board modes', () => {
     },
   )
 
-  it.each(['vote', 'discuss'] as const)(
+  it.each(['discuss'] as const)(
     'the %s placeholder is plain text with no control',
     async (status) => {
       setup({ board: boardOf(status) })
@@ -470,6 +473,25 @@ describe('board modes', () => {
       )
     },
   )
+
+  it('vote shows vote mode, not the placeholder or the flat card list (#23)', async () => {
+    setup({ board: boardOf('vote') })
+    await modeHeading('Vote')
+
+    expect(await screen.findByTestId('vote-board')).toBeInTheDocument()
+    expect(screen.queryByTestId('mode-placeholder')).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('Voting is not available yet.'),
+    ).not.toBeInTheDocument()
+    expect(screen.getByText(VOTE_TOTALS_HIDDEN)).toBeInTheDocument()
+    // No clusters: the six cards are ungrouped and shown read-only.
+    expect(
+      screen.queryByRole('heading', { level: 3, name: 'Start (3)' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { level: 3, name: 'Ungrouped (6)' }),
+    ).toBeInTheDocument()
+  })
 })
 
 describe('board cards', () => {
@@ -527,7 +549,8 @@ describe('board cards', () => {
   })
 
   // Cluster mode always has its Ungrouped section (ClusterMode.test.tsx).
-  it.each(['reveal', 'vote', 'discuss', 'closed'] as const)(
+  // Vote mode has its own empty layouts (below and VoteMode.test.tsx).
+  it.each(['reveal', 'discuss', 'closed'] as const)(
     'with zero cards %s shows one line and no section',
     async (status) => {
       setup({ board: boardOf(status, true, []) })
@@ -539,6 +562,19 @@ describe('board cards', () => {
       expect(screen.queryAllByRole('heading', { level: 3 })).toHaveLength(0)
     },
   )
+
+  it('with zero cards and zero clusters vote shows its no-clusters line and no section', async () => {
+    setup({ board: boardOf('vote', true, []) })
+    await modeHeading('Vote')
+
+    expect(
+      await screen.findByText('There are no clusters to vote on.'),
+    ).toBeInTheDocument()
+    expect(screen.queryAllByRole('heading', { level: 3 })).toHaveLength(0)
+    expect(within(screen.getByRole('main')).queryAllByRole('button')).toEqual(
+      [],
+    )
+  })
 
   it('shows an empty category line', async () => {
     setup({
