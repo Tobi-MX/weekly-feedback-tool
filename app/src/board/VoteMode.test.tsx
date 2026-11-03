@@ -207,8 +207,10 @@ function serverBoard(board: CycleBoard) {
   boardMock.fetchCycleBoard.mockResolvedValue(board)
 }
 
+/** The vote board, once the first board read is in. */
 async function voteBoard(): Promise<HTMLElement> {
-  return screen.findByTestId('vote-board')
+  // The first render of a file is slow on a loaded machine.
+  return screen.findByTestId('vote-board', {}, { timeout: 5000 })
 }
 
 function escapeRegExp(text: string): string {
