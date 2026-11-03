@@ -1046,6 +1046,13 @@ export function ClusterMode({
         announce: (text) => {
           setAnnouncementState((current) => ({ text, id: current.id + 1 }))
         },
+        markAiIdsSeen: (ids) => {
+          setSeenAiIds((current) =>
+            ids.every((id) => current.has(id))
+              ? current
+              : new Set([...current, ...ids]),
+          )
+        },
         panelShown: () => isFacilitatorRef.current,
         requestPanelFocus: () => {
           setPanelFocus({})

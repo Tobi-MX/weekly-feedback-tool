@@ -12,6 +12,7 @@ import {
   aiClusteringErrorCodeOf,
   type AiClusteringErrorCode,
 } from './aiClusteringErrors'
+import type { CycleBoard } from './boardApi'
 import { cycleBoardQueryKey } from './boardKeys'
 
 /** The selector of the AI suggestions panel. */
@@ -29,6 +30,11 @@ export interface AiAlert {
  */
 export interface AiSink {
   readonly announce: (text: string) => void
+  /**
+   * The AI cluster ids of the board this tab's own run re-read: they are its
+   * result, never "new AI suggestions" from elsewhere, whenever they render.
+   */
+  readonly markAiIdsSeen: (ids: readonly string[]) => void
   readonly panelShown: () => boolean
   readonly requestPanelFocus: () => void
 }
@@ -127,14 +133,18 @@ export function useAiClusteringRun({
     pendingRef.current = true
     setPending(true)
     setAlert(null)
-    const reread = () =>
-      queryClient.invalidateQueries({
-        queryKey: cycleBoardQueryKey(userId, cycleId),
-      })
+    const queryKey = cycleBoardQueryKey(userId, cycleId)
+    const reread = () => queryClient.invalidateQueries({ queryKey })
     requestAiClusters(cycleId)
       .then(async (result) => {
         await reread()
         const sink = sinkRef.current
+        const board = queryClient.getQueryData<CycleBoard | null>(queryKey)
+        sink?.markAiIdsSeen(
+          (board?.clusters ?? [])
+            .filter((cluster) => cluster.source === 'ai')
+            .map((cluster) => cluster.clusterId),
+        )
         const moveFocus = sink !== null && sink.panelShown() && focusInAiPanel()
         setAlert(null)
         sink?.announce(aiSuccessAnnouncement(result))
