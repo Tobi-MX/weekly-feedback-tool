@@ -65,6 +65,13 @@ export interface StartedRetrospective {
   readonly revealedAt: string | null
 }
 
+/** The `close_voting` result row (#24): the cycle now in discuss. */
+export interface ClosedVoting {
+  readonly id: string
+  readonly status: 'discuss'
+  readonly votingClosedAt: string
+}
+
 /** The stage the board's facilitator control may leave. */
 export type AdvanceFromStatus = 'reveal' | 'cluster'
 
@@ -143,6 +150,15 @@ const advancedRowSchema = z.object({
   status: statusSchema,
 })
 
+// Strict: exactly the three columns, in discuss, with voting_closed_at set.
+const closedVotingRowSchema = z
+  .object({
+    id: z.string(),
+    status: z.literal('discuss'),
+    voting_closed_at: z.string(),
+  })
+  .strict()
+
 const countSchema = z.number().int().nonnegative()
 
 // Narrow: unknown keys (for example an author id) are dropped.
@@ -191,13 +207,20 @@ async function callRpc(
     | 'close_cycle'
     | 'start_retrospective'
     | 'advance_stage'
+    | 'close_voting'
     | 'get_cycle_status',
   args: Record<string, unknown>,
 ): Promise<unknown> {
   if (!supabase) {
     throw new CyclesApiError('unknown')
   }
-  const { data, error }: DbResult = await supabase.rpc(name, args)
+  let result: DbResult
+  try {
+    result = await supabase.rpc(name, args)
+  } catch {
+    throw new CyclesApiError('unknown')
+  }
+  const { data, error } = result
   if (error) {
     throw new CyclesApiError(toCyclesErrorCode(error.message))
   }
@@ -353,6 +376,26 @@ export async function advanceStage(
     throw new CyclesApiError('unknown')
   }
   return { id: row.id, status: row.status }
+}
+
+/**
+ * Facilitator only (#24): closes voting, moving the cycle from vote to
+ * discuss. Closing a cycle already in discuss is a successful no-op that
+ * returns the current row. The reply must be exactly one row for this cycle,
+ * in discuss, with `voting_closed_at` set; anything else is `unknown`.
+ */
+export async function closeVoting(cycleId: string): Promise<ClosedVoting> {
+  const data = await callRpc('close_voting', { p_cycle_id: cycleId })
+  const parsed = z.array(closedVotingRowSchema).length(1).safeParse(data)
+  if (!parsed.success || parsed.data[0].id !== cycleId) {
+    throw new CyclesApiError('unknown')
+  }
+  const [row] = parsed.data
+  return {
+    id: row.id,
+    status: row.status,
+    votingClosedAt: row.voting_closed_at,
+  }
 }
 
 /**

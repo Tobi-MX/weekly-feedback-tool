@@ -3,6 +3,7 @@ import {
   CyclesApiError,
   advanceStageErrorMessage,
   closeCycleErrorMessage,
+  closeVotingErrorMessage,
   createCycleErrorMessage,
   startRetrospectiveErrorMessage,
   toCyclesErrorCode,
@@ -25,6 +26,7 @@ const {
   fetchCycleStatus,
   startRetrospective,
   advanceStage,
+  closeVoting,
 } = await vi.importActual<typeof import('./cyclesApi')>('./cyclesApi')
 
 interface DbResult {
@@ -768,5 +770,101 @@ describe('advanceStage', () => {
     for (const code of ['not_project_member', 'unknown'] as const) {
       expect(advanceStageErrorMessage(code)).toBe('Could not change the stage.')
     }
+  })
+})
+
+describe('closeVoting', () => {
+  const CLOSED_AT = '2026-11-03T10:00:00+00:00'
+  const row = { id: CYCLE_ID, status: 'discuss', voting_closed_at: CLOSED_AT }
+
+  it('calls only close_voting once with exactly { p_cycle_id } and parses the row', async () => {
+    const fake = createClientMock([])
+    fake.rpc.mockResolvedValue({ data: [row], error: null })
+
+    await expect(closeVoting(CYCLE_ID)).resolves.toStrictEqual({
+      id: CYCLE_ID,
+      status: 'discuss',
+      votingClosedAt: CLOSED_AT,
+    })
+    expect(fake.rpc).toHaveBeenCalledTimes(1)
+    const [name, args] = fake.rpc.mock.calls[0] ?? []
+    expect(name).toBe('close_voting')
+    expect(args).toStrictEqual({ p_cycle_id: CYCLE_ID })
+    expect(fake.from).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['zero rows', []],
+    ['two rows', [row, row]],
+    ['an extra key', [{ ...row, closed_at: null }]],
+    ['another id', [{ ...row, id: '30000000-0000-4000-8000-000000000002' }]],
+    ['another status', [{ ...row, status: 'vote' }]],
+    ['a closed status', [{ ...row, status: 'closed' }]],
+    ['a null voting_closed_at', [{ ...row, voting_closed_at: null }]],
+    ['a missing voting_closed_at', [{ id: CYCLE_ID, status: 'discuss' }]],
+    ['a non-array', row],
+    ['null', null],
+  ])('treats %s as unknown', async (_label, data) => {
+    const fake = createClientMock([])
+    fake.rpc.mockResolvedValue({ data, error: null })
+
+    const error = await captureError(closeVoting(CYCLE_ID))
+    expect(error).toBeInstanceOf(CyclesApiError)
+    expect((error as CyclesApiError).code).toBe('unknown')
+  })
+
+  it('treats a thrown call as unknown without keeping or logging its text', async () => {
+    const fake = createClientMock([])
+    fake.rpc.mockRejectedValue(new Error('socket hang up near Bob'))
+
+    const error = await captureError(closeVoting(CYCLE_ID))
+    expect(error).toBeInstanceOf(CyclesApiError)
+    expect((error as CyclesApiError).code).toBe('unknown')
+    expect((error as CyclesApiError).message).toBe('unknown')
+    expect(console.error).not.toHaveBeenCalled()
+    expect(console.warn).not.toHaveBeenCalled()
+    expect(console.log).not.toHaveBeenCalled()
+  })
+
+  it.each<[string, string, CyclesErrorCode]>([
+    ['42501', 'not_project_member', 'not_project_member'],
+    ['42501', 'not_project_facilitator', 'not_project_facilitator'],
+    ['P0001', 'stage_out_of_date', 'stage_out_of_date'],
+    ['42501', 'permission denied for function close_voting', 'unknown'],
+    ['P0001', 'stage_out_of_date: closed', 'unknown'],
+    ['PGRST202', 'Could not find the function', 'unknown'],
+  ])(
+    '%s %s becomes %s without keeping or logging the raw text',
+    async (pgCode, message, code) => {
+      const fake = createClientMock([])
+      fake.rpc.mockResolvedValue({
+        data: null,
+        error: { code: pgCode, message },
+      })
+
+      const error = await captureError(closeVoting(CYCLE_ID))
+      expect(error).toBeInstanceOf(CyclesApiError)
+      expect((error as CyclesApiError).code).toBe(code)
+      expect((error as CyclesApiError).message).toBe(code)
+      expect(console.error).not.toHaveBeenCalled()
+      expect(console.warn).not.toHaveBeenCalled()
+      expect(console.log).not.toHaveBeenCalled()
+    },
+  )
+
+  it('rejects when Supabase is not configured', async () => {
+    const error = await captureError(closeVoting(CYCLE_ID))
+    expect((error as CyclesApiError).code).toBe('unknown')
+  })
+
+  it('maps each code to exactly its copy, and not_project_member to no toast', () => {
+    expect(closeVotingErrorMessage('not_project_member')).toBeNull()
+    expect(closeVotingErrorMessage('not_project_facilitator')).toBe(
+      'Only the facilitator can close voting.',
+    )
+    expect(closeVotingErrorMessage('stage_out_of_date')).toBe(
+      'Voting has already ended for this cycle.',
+    )
+    expect(closeVotingErrorMessage('unknown')).toBe('Could not close voting.')
   })
 })
