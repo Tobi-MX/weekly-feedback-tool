@@ -107,3 +107,42 @@ export async function expireProjectInvite(
     throw new Error('Could not expire invite: the project has no invite')
   }
 }
+
+/** The private bucket for meeting recordings and transcript files (#28). */
+const MEETING_MEDIA_BUCKET = 'meeting-media'
+
+/**
+ * Removes every `meeting-media` object under the given projects' prefixes
+ * (`{project_id}/{cycle_id}/{file}`). Clients cannot delete objects (#28),
+ * so teardown uses the service role. Returns how many objects it removed.
+ */
+export async function removeMeetingMediaObjects(
+  admin: SupabaseClient,
+  projectIds: readonly string[],
+): Promise<number> {
+  const bucket = admin.storage.from(MEETING_MEDIA_BUCKET)
+  let removed = 0
+  for (const projectId of projectIds) {
+    const cycles = await bucket.list(projectId, { limit: 1000 })
+    if (cycles.error) {
+      throw new Error(`Could not list ${projectId}: ${cycles.error.message}`)
+    }
+    for (const cycle of cycles.data) {
+      const prefix = `${projectId}/${cycle.name}`
+      const files = await bucket.list(prefix, { limit: 1000 })
+      if (files.error) {
+        throw new Error(`Could not list ${prefix}: ${files.error.message}`)
+      }
+      const paths = files.data.map((file) => `${prefix}/${file.name}`)
+      if (paths.length === 0) {
+        continue
+      }
+      const result = await bucket.remove(paths)
+      if (result.error) {
+        throw new Error(`Could not remove objects: ${result.error.message}`)
+      }
+      removed += result.data.length
+    }
+  }
+  return removed
+}

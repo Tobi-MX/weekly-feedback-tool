@@ -1,7 +1,11 @@
 import { randomBytes } from 'node:crypto'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { inject } from 'vitest'
-import { createAdminClient, expireProjectInvite } from './admin'
+import {
+  createAdminClient,
+  expireProjectInvite,
+  removeMeetingMediaObjects,
+} from './admin'
 import type { DbResult } from './assertions'
 import { RLS_EMAIL_DOMAIN, RLS_EMAIL_PREFIX, type RlsEnv } from './env'
 
@@ -298,4 +302,15 @@ export async function expireInvite(projectId: string): Promise<void> {
 /** A random UUID that names no row. */
 export function unknownId(): string {
   return crypto.randomUUID()
+}
+
+/**
+ * Removes every `meeting-media` object under the given projects' prefixes
+ * (#28). Clients cannot delete objects, so this uses the service role; call
+ * it from the uploads suite's teardown.
+ */
+export async function removeMeetingObjects(
+  projectIds: readonly string[],
+): Promise<number> {
+  return removeMeetingMediaObjects(admin(), projectIds)
 }
