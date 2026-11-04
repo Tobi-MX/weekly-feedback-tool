@@ -103,10 +103,12 @@ set search_path = ''
 as $$
 declare
   elem jsonb;
-  prev_start integer := 0;
+  seg_text text;
+  start_text text;
+  end_text text;
   start_ms integer;
   end_ms integer;
-  seg_text text;
+  prev_start integer := 0;
 begin
   if p_segments is null
      or pg_catalog.jsonb_typeof(p_segments) <> 'array'
@@ -114,26 +116,31 @@ begin
     return false;
   end if;
 
-  for elem in
-    select x.value
-      from pg_catalog.jsonb_array_elements(p_segments) with ordinality as x(value, ord)
-     order by x.ord
-  loop
+  -- jsonb_array_elements yields the elements in array order. Each check is
+  -- a simple expression (no query per element), so 20,000 elements take a
+  -- fraction of a second; every cast is guarded, so the answer is false,
+  -- never an error.
+  for elem in select a.value from pg_catalog.jsonb_array_elements(p_segments) a loop
     if pg_catalog.jsonb_typeof(elem) <> 'object'
-       or (select pg_catalog.array_agg(k order by k) from pg_catalog.jsonb_object_keys(elem) k)
-          is distinct from array['end_ms', 'start_ms', 'text']
+       or not (elem ?& array['start_ms', 'end_ms', 'text'])
+       or (elem - 'start_ms' - 'end_ms' - 'text') <> '{}'::jsonb
        or pg_catalog.jsonb_typeof(elem -> 'start_ms') <> 'number'
        or pg_catalog.jsonb_typeof(elem -> 'end_ms') <> 'number'
-       or pg_catalog.jsonb_typeof(elem -> 'text') <> 'string'
-       -- Integers only: no sign, no fraction, no exponent, at most 8 digits.
-       or (elem ->> 'start_ms') !~ '^[0-9]{1,8}$'
-       or (elem ->> 'end_ms') !~ '^[0-9]{1,8}$' then
+       or pg_catalog.jsonb_typeof(elem -> 'text') <> 'string' then
       return false;
     end if;
 
-    start_ms := (elem ->> 'start_ms')::integer;
-    end_ms := (elem ->> 'end_ms')::integer;
+    start_text := elem ->> 'start_ms';
+    end_text := elem ->> 'end_ms';
     seg_text := elem ->> 'text';
+
+    -- Integers only: no sign, no fraction, no exponent, at most 8 digits.
+    if start_text !~ '^[0-9]{1,8}$' or end_text !~ '^[0-9]{1,8}$' then
+      return false;
+    end if;
+
+    start_ms := start_text::integer;
+    end_ms := end_text::integer;
 
     if start_ms > 86400000
        or end_ms > 86400000
