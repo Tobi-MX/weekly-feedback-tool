@@ -650,8 +650,9 @@ select is(
 );
 select is(
   (select array_agg(p.proname::text order by p.proname) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname in ('public', 'private') and p.prosrc ~ 'public\.meeting_uploads'),
-  array['can_read_meeting_object', 'can_upload_meeting_object', 'complete_meeting_upload', 'create_meeting_upload', 'get_cycle_uploads'],
-  'only the three RPCs and the two helpers read meeting_uploads'
+  -- #29 adds get_pasted_transcript_text, reject_transcript_upload and store_transcript.
+  array['can_read_meeting_object', 'can_upload_meeting_object', 'complete_meeting_upload', 'create_meeting_upload', 'get_cycle_uploads', 'get_pasted_transcript_text', 'reject_transcript_upload', 'store_transcript'],
+  'only the upload and transcript RPCs and the two helpers read meeting_uploads'
 );
 
 -- ---------------------------------------------------------------------------
@@ -955,9 +956,10 @@ select is(mu.list('A', 'random'), mu.e('not_project_member'), 'list: a random cy
 select is(mu.list('B', 'P1'), mu.e('not_project_facilitator'), 'list: B gets not_project_facilitator');
 select is((select array_agg(k order by k) from jsonb_object_keys(mu.list('A', 'P1')) k), array['cycle_id', 'uploads'], 'list: exactly cycle_id and uploads');
 select is(
-  (select bool_and((select array_agg(k order by k) from jsonb_object_keys(x) k) = array['created_at', 'error_code', 'error_message', 'kind', 'mime_type', 'original_filename', 'size_bytes', 'status', 'storage_path', 'text_length', 'updated_at', 'upload_id', 'uploaded_at']) from jsonb_array_elements(mu.list('A', 'P1') -> 'uploads') x),
+  (select bool_and((select array_agg(k order by k) from jsonb_object_keys(x) k) = array['created_at', 'error_code', 'error_message', 'kind', 'mime_type', 'original_filename', 'size_bytes', 'status', 'storage_path', 'text_length', 'transcript_length', 'transcript_segment_count', 'updated_at', 'upload_id', 'uploaded_at']) from jsonb_array_elements(mu.list('A', 'P1') -> 'uploads') x),
   true,
-  'list: every element has exactly the 13 keys'
+  -- #29 adds transcript_length and transcript_segment_count.
+  'list: every element has exactly the 15 keys'
 );
 select is(
   (select jsonb_agg(x -> 'upload_id' order by o) from jsonb_array_elements(mu.list('A', 'P1') -> 'uploads') with ordinality e(x, o)),

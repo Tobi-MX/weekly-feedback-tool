@@ -442,13 +442,13 @@ select is((select (select count(*)::int from regexp_matches(p.prosrc, 'is_projec
 
 select is((select md5(prosrc) from pg_proc where oid = 'public.get_cycle_board(uuid)'::regprocedure), 'a652b8eee54255a3b19a6448c77fc9ee', 'get_cycle_board is unchanged');
 select is(
-  -- ai_runs, votes, notes, actions, and meeting_uploads are added by #20's, #22's, #25's, #26's, and #28's later migrations, not by this one.
-  (select string_agg(table_name, ',' order by table_name) from information_schema.tables where table_schema = 'public' and table_name not in ('ai_runs', 'votes', 'notes', 'actions', 'meeting_uploads')),
+  -- ai_runs, votes, notes, actions, meeting_uploads, and transcripts are added by #20's, #22's, #25's, #26's, #28's, and #29's later migrations, not by this one.
+  (select string_agg(table_name, ',' order by table_name) from information_schema.tables where table_schema = 'public' and table_name not in ('ai_runs', 'votes', 'notes', 'actions', 'meeting_uploads', 'transcripts')),
   'card_authors,cards,cluster_cards,clusters,cycle_events,feedback_cycles,profiles,project_invites,project_members,projects',
   'no table or view is added to public'
 );
 select is(
-  (select md5(string_agg(table_name || '.' || column_name || ':' || data_type, ',' order by table_name, ordinal_position)) from information_schema.columns where table_schema = 'public' and table_name not in ('ai_runs', 'votes', 'notes', 'actions', 'meeting_uploads')),
+  (select md5(string_agg(table_name || '.' || column_name || ':' || data_type, ',' order by table_name, ordinal_position)) from information_schema.columns where table_schema = 'public' and table_name not in ('ai_runs', 'votes', 'notes', 'actions', 'meeting_uploads', 'transcripts')),
   -- #25 adds clusters.discussion_status.
   'd2852824e5867bf490b9cf168b07f4e2',
   'no column is added or changed in public'
