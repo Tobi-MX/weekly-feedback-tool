@@ -26,6 +26,7 @@ import {
   useProjectMembersQuery,
 } from '@/projects/useMembers'
 import { AdvanceControl, type StageControlFrom } from './AdvanceControl'
+import type { ProjectMember } from '@/projects/membersApi'
 import type { CycleBoard } from './boardApi'
 import { boardErrorCodeOf } from './boardErrors'
 import {
@@ -49,6 +50,7 @@ import {
   cycleBoardQueryKey,
   useCycleBoardQuery,
 } from './useBoard'
+import { cycleActionsQueryKey } from './useActions'
 import { discussionQueryKey } from './useDiscussion'
 import { voteTotalsQueryKey } from './useVoteTotals'
 
@@ -161,8 +163,10 @@ interface ModeProps {
   readonly onLostAccess: () => void
   readonly onNotFacilitator: () => void
   readonly onRefetchMembers: () => void
-  /** The board's poll interval, for the discussion query (#25). */
+  /** The board's poll interval, for the discussion and actions queries. */
   readonly refetchInterval: number | false
+  /** The members for the action owner picker (#26); undefined while unknown. */
+  readonly members: readonly ProjectMember[] | undefined
   readonly ai: AiClusteringRun
 }
 
@@ -186,6 +190,7 @@ function BoardMode({
   onNotFacilitator,
   onRefetchMembers,
   refetchInterval,
+  members,
   ai,
 }: ModeProps) {
   const { status, isRevealed, cards } = board
@@ -291,6 +296,7 @@ function BoardMode({
           onLostAccess={onLostAccess}
           onNotFacilitator={onNotFacilitator}
           onRefetchMembers={onRefetchMembers}
+          members={members}
         />
       ) : status === 'cluster' ? (
         <ClusterMode
@@ -390,12 +396,16 @@ function BoardScreen({ cycleId }: { cycleId: string }) {
     void queryClient.invalidateQueries({
       queryKey: cycleQueryKey(userId, cycleId),
     })
-    // Only an active (discuss) totals or discussion query is refetched.
+    // Only an active (discuss) totals, discussion, or actions query is
+    // refetched.
     void queryClient.invalidateQueries({
       queryKey: voteTotalsQueryKey(userId, cycleId),
     })
     void queryClient.invalidateQueries({
       queryKey: discussionQueryKey(userId, cycleId),
+    })
+    void queryClient.invalidateQueries({
+      queryKey: cycleActionsQueryKey(userId, cycleId),
     })
     if (projectId !== undefined) {
       void queryClient.invalidateQueries({
@@ -603,6 +613,9 @@ function BoardScreen({ cycleId }: { cycleId: string }) {
           onNotFacilitator={onNotFacilitator}
           onRefetchMembers={refetchMembers}
           refetchInterval={refetchInterval}
+          members={
+            membersQuery.isSuccess ? (membersQuery.data ?? undefined) : undefined
+          }
           ai={ai}
         />
       </>

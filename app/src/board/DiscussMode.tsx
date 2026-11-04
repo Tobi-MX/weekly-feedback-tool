@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import type { ProjectMember } from '@/projects/membersApi'
+import { ActionItems } from './ActionItems'
 import type { BoardCard, BoardCluster, CycleBoard } from './boardApi'
 import { ClusterCardItem, ClusterHeading } from './BoardCards'
 import {
@@ -233,6 +235,11 @@ export interface DiscussModeProps {
   readonly onNotFacilitator: () => void
   /** Re-reads the project members (a refused moderation delete). */
   readonly onRefetchMembers: () => void
+  /**
+   * The project's current members for the action owner picker (#26), or
+   * undefined while the members query is loading or has failed.
+   */
+  readonly members: readonly ProjectMember[] | undefined
 }
 
 /**
@@ -240,8 +247,9 @@ export interface DiscussModeProps {
  * notes. Topics stay in the order `get_vote_totals` returns them; a status
  * never moves, hides, or collapses a topic. Every member sees the status
  * line and the notes and can add notes; the facilitator also sets statuses
- * and can delete any note. Writes are not optimistic: a change shows once
- * the refetch it starts is in. It never shows the caller's own votes
+ * and can delete any note. #26's Action items section follows General
+ * notes. Writes are not optimistic: a change shows once the refetch it
+ * starts is in. It never shows the caller's own votes
  * (`myVotes`, `votesRemaining`), and no control is ever inside a card.
  */
 export function DiscussMode({
@@ -251,6 +259,7 @@ export function DiscussMode({
   onLostAccess,
   onNotFacilitator,
   onRefetchMembers,
+  members,
 }: DiscussModeProps) {
   const { cycleId } = board
   const totalsQuery = useVoteTotalsQuery(cycleId, true)
@@ -787,6 +796,19 @@ export function DiscussMode({
         <span key={announcement.id}>{announcement.text}</span>
       </p>
       {results}
+      <ActionItems
+        board={board}
+        topics={
+          agenda ? agenda.map((item) => item.cluster) : board.clusters
+        }
+        members={members}
+        isFacilitator={isFacilitator}
+        refetchInterval={refetchInterval}
+        announce={announce}
+        onLostAccess={onLostAccess}
+        onNotFacilitator={onNotFacilitator}
+        onRefetchMembers={onRefetchMembers}
+      />
       {ungrouped.length === 0 ? null : (
         <section
           aria-labelledby="discuss-ungrouped-heading"

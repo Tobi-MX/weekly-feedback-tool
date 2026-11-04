@@ -6,6 +6,7 @@ import { queryClient } from '../lib/queryClient'
 import type { ProjectMember } from '../projects/membersApi'
 import { deferred, mockRestoredSession } from '../test/authMock'
 import { boardMock } from '../test/boardMock'
+import { actionsMock } from '../test/actionsMock'
 import { cyclesMock } from '../test/cyclesMock'
 import { discussionMock } from '../test/discussionMock'
 import { membersMock } from '../test/membersMock'
@@ -203,6 +204,11 @@ function setup(options: SetupOptions = {}) {
       discussionStatus: 'pending',
     })),
     notes: [],
+  })
+  // #26: discuss mode also reads the action items (none).
+  actionsMock.fetchCycleActions.mockResolvedValue({
+    cycleId: CYCLE_ID,
+    actions: [],
   })
   return renderApp({ initialEntries: [PATH] })
 }
@@ -545,7 +551,7 @@ describe('identical for everyone, aggregates only', () => {
         board.querySelector('[role="progressbar"], progress, meter'),
       ).toBeNull()
       // #25: apart from the facilitator's status groups, the only controls
-      // are Add note, the same for everyone.
+      // are Add note, the same for everyone. #26: and Add action item.
       expect(
         within(shared)
           .queryAllByRole('button')
@@ -555,6 +561,7 @@ describe('identical for everyone, aggregates only', () => {
         'Add note to Process',
         'Add note to Tools',
         'Add a general note',
+        'Add action item',
       ])
       view.unmount()
       queryClient.clear()
