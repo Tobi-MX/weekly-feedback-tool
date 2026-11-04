@@ -22,9 +22,15 @@ import {
   fileProblemMessage,
   textProblemMessage,
 } from './UploadForm'
-import { UploadList, uploadName } from './UploadList'
+import { PASTED_TEXT_NAME, UploadList, uploadName } from './UploadList'
+import {
+  isTranscriptParseError,
+  parseTranscript,
+  resolveTranscriptFormat,
+} from './transcriptParser'
 import {
   UPLOAD_STAGE_MESSAGE,
+  transcriptParseMessage,
   uploadErrorCodeOf,
   uploadErrorMessage,
   type UploadErrorCode,
@@ -38,12 +44,15 @@ import {
 } from './uploadRules'
 import {
   RegisteredUploadError,
+  TranscriptReadError,
   useAddMeetingUpload,
   useCycleUploadsQuery,
+  useReadTranscript,
   uploadsQueryKey,
-  type AddUploadInput,
   type AddUploadResult,
   type RegisteredFile,
+  type TranscriptReadOutcome,
+  type TranscriptSource,
 } from './useUploads'
 
 export const UPLOAD_PAGE_LOADING_MESSAGE = 'Loading the meeting record…'
@@ -54,6 +63,8 @@ export const UPLOAD_DENIED_MESSAGE =
 export const TEXT_SAVED_MESSAGE = 'Transcript text saved.'
 export const CHECK_AGAIN_MISSING_MESSAGE =
   'The file has not arrived. Add it again as a new upload.'
+export const PASTED_PARSE_ERROR_PREFIX = 'The pasted text could not be read.'
+export const PASTED_TEXT_READ_MESSAGE = 'Pasted transcript text read.'
 
 const linkClass = cn(
   'inline-block rounded-sm text-sm font-medium underline underline-offset-4',
@@ -108,20 +119,50 @@ function Header({ cycle }: { cycle: CycleDetail }) {
 
 /** What the facilitator is sending right now. */
 interface PendingSend {
-  readonly type: 'file' | 'text'
+  /** `read` is a Read again or Read transcript. */
+  readonly type: 'file' | 'text' | 'read'
   readonly name: string
-  /** The row being retried, when known. */
+  /** The row being retried or read, when known. */
   readonly uploadId: string | null
+  /** A transcript file moves from uploading to reading. */
+  readonly reading: boolean
 }
 
-/** A failure shown under the form; `retry` is set once the row exists. */
+/** A failed read of a row that is still `uploaded` (#29). */
+interface ReadRetry {
+  readonly source: TranscriptSource
+  readonly name: string
+  /** The selected file this row came from, cleared once it is read. */
+  readonly file: File | null
+  /** Pasted text from this tab's form: success says it was saved. */
+  readonly fromForm: boolean
+}
+
+/**
+ * A failure shown under the form: `retry` once the row exists and its upload
+ * failed, `read` once it was uploaded and its read failed, or the message of
+ * a file the parser refused.
+ */
 interface FormFailure {
   readonly code: UploadErrorCode
   readonly retry: {
     readonly registered: RegisteredFile
     readonly file: File
   } | null
+  readonly read: ReadRetry | null
+  readonly message: string | null
 }
+
+/** Read failures whose row cannot be read again: their copy says what to do. */
+const FINAL_READ_CODES: readonly UploadErrorCode[] = [
+  'upload_not_transcript',
+  'upload_not_ready',
+  'transcript_already_stored',
+  'invalid_transcript',
+  'upload_not_found',
+  'not_project_member',
+  'not_project_facilitator',
+]
 
 interface MeetingRecordProps {
   readonly cycle: CycleDetail
@@ -141,6 +182,7 @@ function MeetingRecord({
   const canUpload = cycle.status === 'discuss' || cycle.status === 'closed'
   const uploadsQuery = useCycleUploadsQuery(cycle.id, true)
   const mutation = useAddMeetingUpload(cycle.id)
+  const readMutation = useReadTranscript(cycle.id)
 
   const mountedRef = useRef(false)
   useEffect(() => {
@@ -150,7 +192,7 @@ function MeetingRecord({
     }
   }, [])
   // A double click or a held Enter must not send a second request before
-  // React re-renders.
+  // React re-renders. One sequence per tab covers every button.
   const sendingRef = useRef(false)
   const [pending, setPending] = useState<PendingSend | null>(null)
 
@@ -186,21 +228,24 @@ function MeetingRecord({
       onLostAccess()
     } else if (code === 'not_project_facilitator') {
       onNotFacilitator()
-    } else if (code === 'upload_not_found') {
+    } else if (
+      code === 'upload_not_found' ||
+      code === 'transcript_already_stored' ||
+      code === 'upload_not_ready'
+    ) {
       refetchUploads()
     }
   }
 
-  const send = (
-    input: AddUploadInput,
+  const send = <T,>(
+    run: () => Promise<T>,
     next: PendingSend,
-    onDone: (result: AddUploadResult) => void,
+    onDone: (result: T) => void,
     onFailed: (error: unknown) => void,
   ) => {
     sendingRef.current = true
     setPending(next)
-    mutation
-      .mutateAsync(input)
+    run()
       .then(
         (result) => {
           if (mountedRef.current) {
@@ -221,6 +266,15 @@ function MeetingRecord({
       })
   }
 
+  /** A transcript file's line moves from `Uploading` to `Reading`. */
+  const startReading = () => {
+    if (mountedRef.current) {
+      setPending((current) =>
+        current === null ? current : { ...current, reading: true },
+      )
+    }
+  }
+
   const clearFile = (fileKind: FileUploadKind) => {
     setFiles((current) => ({ ...current, [fileKind]: null }))
     const input =
@@ -234,22 +288,74 @@ function MeetingRecord({
     }
   }
 
+  const clearSelected = (file: File | null) => {
+    const fileKind = FILE_KINDS.find((k) => file !== null && files[k] === file)
+    if (fileKind !== undefined) {
+      clearFile(fileKind)
+    }
+  }
+
+  /** A refused parse: the row is rejected and the alert says why. */
+  const parseFailed = (
+    name: string,
+    read: Extract<TranscriptReadOutcome, { type: 'rejected' }>,
+  ) => {
+    setFailure({
+      code: 'unknown',
+      retry: null,
+      read: null,
+      message: `${name} was uploaded but could not be read. ${transcriptParseMessage(read.error, read.format)}`,
+    })
+  }
+
+  const readFailed = (
+    error: unknown,
+    name: string,
+    file: File | null,
+    fromForm: boolean,
+  ) => {
+    const code = uploadErrorCodeOf(error)
+    setFailure({
+      code,
+      retry: null,
+      read:
+        error instanceof TranscriptReadError
+          ? { source: error.source, name, file, fromForm }
+          : null,
+      message: null,
+    })
+    reactTo(code)
+  }
+
   const fileFinished = (
     fileKind: FileUploadKind,
     name: string,
     result: AddUploadResult,
   ) => {
     setFailure(null)
+    if (result.read?.type === 'rejected') {
+      // The file stays selected; the item shows the reason.
+      parseFailed(name, result.read)
+      return
+    }
     if (result.status === 'rejected') {
       // The file stays selected.
       announce(`${name} was rejected.`)
       return
     }
     clearFile(fileKind)
-    announce(`${name} uploaded.`)
+    announce(
+      result.read?.type === 'stored'
+        ? `${name} uploaded and read.`
+        : `${name} uploaded.`,
+    )
   }
 
   const fileFailed = (file: File, error: unknown) => {
+    if (error instanceof TranscriptReadError) {
+      readFailed(error, file.name, file, false)
+      return
+    }
     const code = uploadErrorCodeOf(error)
     setFailure({
       code,
@@ -257,6 +363,8 @@ function MeetingRecord({
         error instanceof RegisteredUploadError
           ? { registered: error.registered, file }
           : null,
+      read: null,
+      message: null,
     })
     reactTo(code)
   }
@@ -271,18 +379,33 @@ function MeetingRecord({
         setFieldError(textProblemMessage(problem))
         return
       }
+      // #29, decision 10: parse first; bad text is never registered.
+      const parsed = parseTranscript(text, 'auto')
+      if (isTranscriptParseError(parsed)) {
+        setFieldError(
+          `${PASTED_PARSE_ERROR_PREFIX} ${transcriptParseMessage(parsed, resolveTranscriptFormat(text, 'auto'))}`,
+        )
+        return
+      }
       setFieldError(null)
       setFailure(null)
       send(
-        { type: 'text', text },
-        { type: 'text', name: '', uploadId: null },
+        () => mutation.mutateAsync({ type: 'text', text, parsed }),
+        { type: 'text', name: '', uploadId: null, reading: false },
         () => {
           setText('')
           announce(TEXT_SAVED_MESSAGE)
         },
         (error) => {
+          if (error instanceof TranscriptReadError) {
+            // Registered: Read again re-sends the parsed text, so the form
+            // must not register it a second time.
+            setText('')
+            readFailed(error, PASTED_TEXT_NAME, null, true)
+            return
+          }
           const code = uploadErrorCodeOf(error)
-          setFailure({ code, retry: null })
+          setFailure({ code, retry: null, read: null, message: null })
           reactTo(code)
         },
       )
@@ -298,8 +421,14 @@ function MeetingRecord({
     setFieldError(null)
     setFailure(null)
     send(
-      { type: 'file', kind: fileKind, file },
-      { type: 'file', name: file.name, uploadId: null },
+      () =>
+        mutation.mutateAsync({
+          type: 'file',
+          kind: fileKind,
+          file,
+          onReading: startReading,
+        }),
+      { type: 'file', name: file.name, uploadId: null, reading: false },
       (result) => {
         fileFinished(fileKind, file.name, result)
       },
@@ -316,21 +445,32 @@ function MeetingRecord({
     }
     const fileKind = FILE_KINDS.find((k) => files[k] === retry.file)
     send(
-      { type: 'retry', registered: retry.registered, file: retry.file },
+      () =>
+        mutation.mutateAsync({
+          type: 'retry',
+          registered: retry.registered,
+          file: retry.file,
+          onReading: startReading,
+        }),
       {
         type: 'file',
         name: retry.file.name,
         uploadId: retry.registered.uploadId,
+        reading: false,
       },
       (result) => {
         if (fileKind !== undefined) {
           fileFinished(fileKind, retry.file.name, result)
+        } else if (result.read?.type === 'rejected') {
+          parseFailed(retry.file.name, result.read)
         } else {
           setFailure(null)
           announce(
             result.status === 'rejected'
               ? `${retry.file.name} was rejected.`
-              : `${retry.file.name} uploaded.`,
+              : result.read?.type === 'stored'
+                ? `${retry.file.name} uploaded and read.`
+                : `${retry.file.name} uploaded.`,
           )
         }
       },
@@ -340,14 +480,79 @@ function MeetingRecord({
     )
   }
 
+  /** One read of an `uploaded` transcript row: Read again or Read transcript. */
+  const read = (retry: ReadRetry) => {
+    if (sendingRef.current) {
+      return
+    }
+    send(
+      () => readMutation.mutateAsync(retry.source),
+      {
+        type: 'read',
+        name: retry.name,
+        uploadId: retry.source.uploadId,
+        reading: true,
+      },
+      (outcome) => {
+        if (outcome.type === 'rejected') {
+          parseFailed(retry.name, outcome)
+          return
+        }
+        setFailure(null)
+        clearSelected(retry.file)
+        announce(
+          retry.fromForm
+            ? TEXT_SAVED_MESSAGE
+            : retry.source.type === 'text'
+              ? PASTED_TEXT_READ_MESSAGE
+              : `${retry.name} read.`,
+        )
+      },
+      (error) => {
+        readFailed(error, retry.name, retry.file, retry.fromForm)
+      },
+    )
+  }
+
+  const readAgain = () => {
+    const retry = failure?.read
+    if (retry) {
+      read(retry)
+    }
+  }
+
+  const readTranscriptOf = (upload: MeetingUpload) => {
+    const name = uploadName(upload)
+    if (upload.kind === 'transcript_text') {
+      read({
+        source: { type: 'text', uploadId: upload.uploadId, parsed: null },
+        name,
+        file: null,
+        fromForm: false,
+      })
+    } else if (upload.storagePath !== null) {
+      read({
+        source: {
+          type: 'file',
+          uploadId: upload.uploadId,
+          storagePath: upload.storagePath,
+          mimeType: upload.mimeType,
+        },
+        name,
+        file: null,
+        fromForm: false,
+      })
+    }
+  }
+
   const checkAgain = (upload: MeetingUpload) => {
     if (sendingRef.current) {
       return
     }
     const name = uploadName(upload)
     send(
-      { type: 'check', uploadId: upload.uploadId },
-      { type: 'file', name, uploadId: upload.uploadId },
+      () => mutation.mutateAsync({ type: 'check', uploadId: upload.uploadId }),
+      { type: 'file', name, uploadId: upload.uploadId, reading: false },
       (result) => {
         announce(
           result.status === 'rejected'
@@ -371,7 +576,11 @@ function MeetingRecord({
   }
 
   const failureMessage =
-    failure !== null ? uploadErrorMessage(failure.code) : null
+    failure === null
+      ? null
+      : (failure.message ?? uploadErrorMessage(failure.code))
+  const canReadAgain =
+    failure?.read != null && !FINAL_READ_CODES.includes(failure.code)
 
   return (
     <>
@@ -412,7 +621,9 @@ function MeetingRecord({
             <p role="status" className={cn('text-sm', wrapAnywhere)}>
               {pending.type === 'text'
                 ? 'Saving transcript text…'
-                : `Uploading ${pending.name}…`}
+                : pending.reading
+                  ? `Reading ${pending.name}…`
+                  : `Uploading ${pending.name}…`}
             </p>
           ) : null}
           {failureMessage !== null ? (
@@ -432,6 +643,17 @@ function MeetingRecord({
                   Retry upload
                 </Button>
               ) : null}
+              {canReadAgain ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  aria-disabled={pending !== null ? 'true' : undefined}
+                  className="aria-disabled:opacity-50"
+                  onClick={readAgain}
+                >
+                  Read again
+                </Button>
+              ) : null}
             </div>
           ) : null}
         </section>
@@ -446,10 +668,12 @@ function MeetingRecord({
         headingRef={headingRef}
         activeUploadId={pending?.uploadId ?? null}
         busy={pending !== null}
+        canRead={canUpload}
         onRetryLoad={() => {
           void uploadsQuery.refetch()
         }}
         onCheckAgain={checkAgain}
+        onReadTranscript={readTranscriptOf}
       />
     </>
   )

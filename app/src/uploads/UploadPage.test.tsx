@@ -83,6 +83,8 @@ function item(overrides: Partial<MeetingUpload> = {}): MeetingUpload {
     createdAt: T,
     uploadedAt: T,
     updatedAt: T,
+    transcriptLength: null,
+    transcriptSegmentCount: null,
     ...overrides,
   }
 }
@@ -528,6 +530,13 @@ describe('sending', () => {
       storagePath: null,
       mimeType: null,
     })
+    // #29: the parsed text is then stored.
+    uploadsMock.storeTranscript.mockResolvedValue({
+      uploadId: textItem().uploadId,
+      status: 'extracting',
+      textLength: 13,
+      segmentCount: 0,
+    })
     await formReady()
     fireEvent.click(
       screen.getByRole('radio', { name: 'Paste transcript text' }),
@@ -877,5 +886,779 @@ describe('leaving during an upload', () => {
     expect(screen.queryByText('standup.mp3 uploaded.')).not.toBeInTheDocument()
     expect(consoleError).not.toHaveBeenCalled()
     expect(consoleWarn).not.toHaveBeenCalled()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #29: reading transcripts.
+// ---------------------------------------------------------------------------
+
+const VTT_ID = 'b1000000-0000-4000-8000-000000000021'
+const VTT_PATH = `${PROJECT_ID}/${CYCLE_ID}/${VTT_ID}.vtt`
+const VTT_TEXT =
+  'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n<v Alice>Hi\n\n00:00:02.000 --> 00:00:03.500\nBob: Hello\n'
+const VTT_SEGMENTS = [
+  { start_ms: 1000, end_ms: 2000, text: 'Alice: Hi' },
+  { start_ms: 2000, end_ms: 3500, text: 'Bob: Hello' },
+]
+const MALFORMED_VTT = 'WEBVTT\n\n1\n00:00:02.000 --> 00:00:01.000\nHi\n'
+const PASTED_ID = 'b1000000-0000-4000-8000-000000000031'
+
+function bytesOf(text: string): Uint8Array {
+  return new TextEncoder().encode(text)
+}
+
+function transcriptCreated(
+  name = 'standup.vtt',
+  mimeType = 'text/vtt',
+): CreatedUpload {
+  const ext = name.slice(name.lastIndexOf('.') + 1)
+  return {
+    uploadId: VTT_ID,
+    kind: 'transcript_file',
+    status: 'pending_upload',
+    storagePath: `${PROJECT_ID}/${CYCLE_ID}/${VTT_ID}.${ext}`,
+    mimeType,
+  }
+}
+
+function transcriptItem(overrides: Partial<MeetingUpload> = {}): MeetingUpload {
+  return item({
+    uploadId: VTT_ID,
+    kind: 'transcript_file',
+    originalFilename: 'standup.vtt',
+    mimeType: 'text/vtt',
+    sizeBytes: 120,
+    storagePath: VTT_PATH,
+    ...overrides,
+  })
+}
+
+function pastedItem(overrides: Partial<MeetingUpload> = {}): MeetingUpload {
+  return textItem({ uploadId: PASTED_ID, ...overrides })
+}
+
+function stored(textLength: number, segmentCount: number, uploadId = VTT_ID) {
+  return {
+    uploadId,
+    status: 'extracting' as const,
+    textLength,
+    segmentCount,
+  }
+}
+
+/** Arranges a transcript file that uploads and completes. */
+function arrangeTranscriptFile(name = 'standup.vtt', mimeType = 'text/vtt') {
+  uploadsMock.createMeetingUpload.mockResolvedValue(
+    transcriptCreated(name, mimeType),
+  )
+  uploadsMock.uploadMeetingFile.mockResolvedValue(undefined)
+  uploadsMock.completeMeetingUpload.mockResolvedValue({
+    uploadId: VTT_ID,
+    status: 'uploaded',
+    errorCode: null,
+  })
+}
+
+async function chooseTranscript(name = 'standup.vtt'): Promise<File> {
+  await formReady()
+  fireEvent.click(screen.getByRole('radio', { name: 'Transcript file' }))
+  const file = makeFile(name, 120)
+  choose(fileInput('Transcript file'), file)
+  return file
+}
+
+function alertWith(text: string): HTMLElement | undefined {
+  return screen
+    .queryAllByRole('alert')
+    .find((alert) => alert.textContent?.includes(text))
+}
+
+describe('transcript files (#29)', () => {
+  it('reads standup.vtt after the upload: create, upload, complete, download, store, in order; announced once after the refetch', async () => {
+    setup()
+    const create = deferred<CreatedUpload>()
+    const download = deferred<Uint8Array>()
+    arrangeTranscriptFile()
+    uploadsMock.createMeetingUpload.mockReturnValue(create.promise)
+    uploadsMock.downloadTranscriptFile.mockReturnValue(download.promise)
+    uploadsMock.storeTranscript.mockResolvedValue(stored(20, 2))
+    await chooseTranscript()
+    fireEvent.click(screen.getByRole('button', { name: 'Upload' }))
+    expect(await screen.findByText('Uploading standup.vtt…')).toBeVisible()
+    create.resolve(transcriptCreated())
+    expect(await screen.findByText('Reading standup.vtt…')).toBeVisible()
+    expect(screen.queryByText('Uploading standup.vtt…')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Uploading…' })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    )
+    expect(statusRegion()).toHaveTextContent('')
+
+    const refetch = deferred<CycleUploads>()
+    uploadsMock.fetchCycleUploads.mockReturnValue(refetch.promise)
+    download.resolve(bytesOf(VTT_TEXT))
+    await waitFor(() => {
+      expect(uploadsMock.storeTranscript).toHaveBeenCalledTimes(1)
+    })
+    expect(uploadsMock.storeTranscript).toHaveBeenCalledWith(
+      VTT_ID,
+      'Alice: Hi\nBob: Hello',
+      VTT_SEGMENTS,
+    )
+    expect(uploadsMock.downloadTranscriptFile).toHaveBeenCalledWith(VTT_PATH)
+    const order = [
+      uploadsMock.createMeetingUpload,
+      uploadsMock.uploadMeetingFile,
+      uploadsMock.completeMeetingUpload,
+      uploadsMock.downloadTranscriptFile,
+      uploadsMock.storeTranscript,
+    ].map((fn) => fn.mock.invocationCallOrder[0])
+    expect(order).toEqual([...order].sort((a, b) => a - b))
+    // Not announced before the refetch settles.
+    await flush()
+    expect(statusRegion()).toHaveTextContent('')
+    refetch.resolve(
+      list(
+        transcriptItem({
+          status: 'extracting',
+          transcriptLength: 20,
+          transcriptSegmentCount: 2,
+        }),
+      ),
+    )
+    await waitFor(() => {
+      expect(statusRegion()).toHaveTextContent('standup.vtt uploaded and read.')
+    })
+    expect(statusRegion().textContent).toBe('standup.vtt uploaded and read.')
+    expect(
+      screen.getByText('Transcript: 20 characters, 2 timed segments.'),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Status: Extracting outcomes')).toBeInTheDocument()
+    expect(uploadsMock.rejectTranscriptUpload).not.toHaveBeenCalled()
+  })
+
+  it('stores a CRLF .txt with a byte order mark as normalized plain text with no timestamps', async () => {
+    setup()
+    arrangeTranscriptFile('notes.txt', 'text/plain')
+    uploadsMock.downloadTranscriptFile.mockResolvedValue(
+      new Uint8Array([
+        0xef,
+        0xbb,
+        0xbf,
+        ...bytesOf('Alice: Hi  \r\n\r\n\r\n\r\nBob: Yo\r\n'),
+      ]),
+    )
+    uploadsMock.storeTranscript.mockResolvedValue(stored(18, 0))
+    await chooseTranscript('notes.txt')
+    uploadsMock.fetchCycleUploads.mockResolvedValue(
+      list(
+        transcriptItem({
+          originalFilename: 'notes.txt',
+          mimeType: 'text/plain',
+          status: 'extracting',
+          transcriptLength: 18,
+          transcriptSegmentCount: 0,
+        }),
+      ),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Upload' }))
+    await waitFor(() => {
+      expect(statusRegion()).toHaveTextContent('notes.txt uploaded and read.')
+    })
+    expect(uploadsMock.storeTranscript).toHaveBeenCalledWith(
+      VTT_ID,
+      'Alice: Hi\n\nBob: Yo',
+      [],
+    )
+    expect(
+      screen.getByText('Transcript: 18 characters, no timestamps.'),
+    ).toBeInTheDocument()
+  })
+
+  it('uses the singular for 1 character and 1 timed segment, and en-US grouping', async () => {
+    setup({
+      uploads: list(
+        transcriptItem({
+          status: 'extracting',
+          transcriptLength: 1,
+          transcriptSegmentCount: 1,
+        }),
+        transcriptItem({
+          uploadId: 'b1000000-0000-4000-8000-000000000022',
+          status: 'extracting',
+          transcriptLength: 200_000,
+          transcriptSegmentCount: 20_000,
+        }),
+        pastedItem({
+          status: 'extracting',
+          transcriptLength: 1234,
+          transcriptSegmentCount: 0,
+        }),
+      ),
+    })
+    expect(
+      await screen.findByText('Transcript: 1 character, 1 timed segment.'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'Transcript: 200,000 characters, 20,000 timed segments.',
+      ),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('Transcript: 1,234 characters, no timestamps.'),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Not read yet.')).not.toBeInTheDocument()
+  })
+
+  it('a malformed VTT is rejected with the line in the alert, no Read again, and the reason on the item', async () => {
+    setup()
+    arrangeTranscriptFile()
+    uploadsMock.downloadTranscriptFile.mockResolvedValue(bytesOf(MALFORMED_VTT))
+    uploadsMock.rejectTranscriptUpload.mockResolvedValue({
+      uploadId: VTT_ID,
+      status: 'rejected',
+      errorCode: 'transcript_malformed',
+    })
+    const file = await chooseTranscript()
+    uploadsMock.fetchCycleUploads.mockResolvedValue(
+      list(
+        transcriptItem({
+          status: 'rejected',
+          errorCode: 'transcript_malformed',
+        }),
+      ),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Upload' }))
+    const alert = await waitFor(() => {
+      const found = alertWith('standup.vtt was uploaded but could not be read.')
+      expect(found).toBeDefined()
+      return found as HTMLElement
+    })
+    expect(alert.textContent).toBe(
+      'standup.vtt was uploaded but could not be read. Line 4: the cue ends before it starts.',
+    )
+    expect(uploadsMock.rejectTranscriptUpload).toHaveBeenCalledTimes(1)
+    expect(uploadsMock.rejectTranscriptUpload).toHaveBeenCalledWith(
+      VTT_ID,
+      'transcript_malformed',
+    )
+    expect(uploadsMock.storeTranscript).not.toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: 'Read again' })).toBeNull()
+    expect(
+      await screen.findByText(
+        "The file's cues or timestamps are not valid. Fix the file and add it again as a new upload.",
+      ),
+    ).toBeInTheDocument()
+    expect(statusRegion()).not.toHaveTextContent('read.')
+    expect(fileInput('Transcript file').files?.[0]).toBe(file)
+  })
+
+  it('a Windows-1252 .txt shows the bad_encoding copy', async () => {
+    setup()
+    arrangeTranscriptFile('notes.txt', 'text/plain')
+    uploadsMock.downloadTranscriptFile.mockResolvedValue(
+      new Uint8Array([...bytesOf('He said '), 0x93, ...bytesOf('hi')]),
+    )
+    uploadsMock.rejectTranscriptUpload.mockResolvedValue({
+      uploadId: VTT_ID,
+      status: 'rejected',
+      errorCode: 'transcript_bad_encoding',
+    })
+    await chooseTranscript('notes.txt')
+    fireEvent.click(screen.getByRole('button', { name: 'Upload' }))
+    await waitFor(() => {
+      expect(
+        alertWith(
+          'notes.txt was uploaded but could not be read. The file is not UTF-8 or UTF-16 text. Save it as UTF-8 and add it again.',
+        ),
+      ).toBeDefined()
+    })
+    expect(uploadsMock.rejectTranscriptUpload).toHaveBeenCalledWith(
+      VTT_ID,
+      'transcript_bad_encoding',
+    )
+  })
+
+  it.each<[string, () => void, string]>([
+    [
+      'a download failure',
+      () => {
+        uploadsMock.downloadTranscriptFile.mockRejectedValueOnce(
+          new UploadApiError('transcript_download_failed'),
+        )
+      },
+      'The transcript file could not be downloaded. Check your connection and try again.',
+    ],
+    [
+      'a store failure',
+      () => {
+        uploadsMock.storeTranscript.mockRejectedValueOnce(
+          new UploadApiError('unknown'),
+        )
+      },
+      'Something went wrong. Try again.',
+    ],
+  ])(
+    '%s shows its copy with Read again, which re-reads the same row and succeeds',
+    async (_label, fail, message) => {
+      setup()
+      arrangeTranscriptFile()
+      uploadsMock.downloadTranscriptFile.mockResolvedValue(bytesOf(VTT_TEXT))
+      uploadsMock.storeTranscript.mockResolvedValue(stored(20, 2))
+      fail()
+      await chooseTranscript()
+      fireEvent.click(screen.getByRole('button', { name: 'Upload' }))
+      const readAgain = await screen.findByRole('button', {
+        name: 'Read again',
+      })
+      expect(alertWith(message)?.textContent).toBe(`${message}Read again`)
+      expect(statusRegion()).toHaveTextContent('')
+
+      uploadsMock.fetchCycleUploads.mockResolvedValue(
+        list(
+          transcriptItem({
+            status: 'extracting',
+            transcriptLength: 20,
+            transcriptSegmentCount: 2,
+          }),
+        ),
+      )
+      fireEvent.click(readAgain)
+      await waitFor(() => {
+        expect(statusRegion()).toHaveTextContent('standup.vtt read.')
+      })
+      expect(uploadsMock.createMeetingUpload).toHaveBeenCalledTimes(1)
+      expect(uploadsMock.completeMeetingUpload).toHaveBeenCalledTimes(1)
+      expect(uploadsMock.uploadMeetingFile).toHaveBeenCalledTimes(1)
+      expect(uploadsMock.downloadTranscriptFile).toHaveBeenCalledTimes(2)
+      expect(uploadsMock.downloadTranscriptFile).toHaveBeenLastCalledWith(
+        VTT_PATH,
+      )
+      expect(uploadsMock.storeTranscript).toHaveBeenLastCalledWith(
+        VTT_ID,
+        'Alice: Hi\nBob: Hello',
+        VTT_SEGMENTS,
+      )
+      expect(screen.queryByText(message)).not.toBeInTheDocument()
+      expect(fileInput('Transcript file').value).toBe('')
+    },
+  )
+})
+
+describe('pasted transcript text (#29)', () => {
+  function created(): CreatedUpload {
+    return {
+      uploadId: PASTED_ID,
+      kind: 'transcript_text',
+      status: 'uploaded',
+      storagePath: null,
+      mimeType: null,
+    }
+  }
+
+  async function paste(value: string) {
+    await formReady()
+    fireEvent.click(
+      screen.getByRole('radio', { name: 'Paste transcript text' }),
+    )
+    const textarea = screen.getByLabelText('Transcript text')
+    fireEvent.change(textarea, { target: { value } })
+    return textarea
+  }
+
+  it('registers the text as given, stores the normalized text once, and announces Transcript text saved.', async () => {
+    setup()
+    uploadsMock.createMeetingUpload.mockResolvedValue(created())
+    uploadsMock.storeTranscript.mockResolvedValue(stored(17, 0, PASTED_ID))
+    // A textarea's value has LF line endings only.
+    const value = '\ufeffAlice: Hi\n\n\n\nBob: Yo  '
+    await paste(value)
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Save transcript text' }),
+    )
+    await waitFor(() => {
+      expect(statusRegion()).toHaveTextContent('Transcript text saved.')
+    })
+    expect(uploadsMock.createMeetingUpload).toHaveBeenCalledTimes(1)
+    expect(uploadsMock.createMeetingUpload).toHaveBeenCalledWith(CYCLE_ID, {
+      kind: 'transcript_text',
+      pasted_text: value,
+    })
+    expect(uploadsMock.storeTranscript).toHaveBeenCalledTimes(1)
+    expect(uploadsMock.storeTranscript).toHaveBeenCalledWith(
+      PASTED_ID,
+      'Alice: Hi\n\nBob: Yo',
+      [],
+    )
+    const [createOrder] =
+      uploadsMock.createMeetingUpload.mock.invocationCallOrder
+    const [storeOrder] = uploadsMock.storeTranscript.mock.invocationCallOrder
+    expect(createOrder).toBeLessThan(storeOrder)
+  })
+
+  it('stores pasted VTT with its segments', async () => {
+    setup()
+    uploadsMock.createMeetingUpload.mockResolvedValue(created())
+    uploadsMock.storeTranscript.mockResolvedValue(stored(20, 2, PASTED_ID))
+    await paste(VTT_TEXT)
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Save transcript text' }),
+    )
+    await waitFor(() => {
+      expect(statusRegion()).toHaveTextContent('Transcript text saved.')
+    })
+    expect(uploadsMock.storeTranscript).toHaveBeenCalledWith(
+      PASTED_ID,
+      'Alice: Hi\nBob: Hello',
+      VTT_SEGMENTS,
+    )
+  })
+
+  it('shows a parse error under the textarea, sends nothing, and keeps the text', async () => {
+    setup()
+    const textarea = await paste(MALFORMED_VTT)
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Save transcript text' }),
+    )
+    const message = await screen.findByText(
+      'The pasted text could not be read. Line 4: the cue ends before it starts.',
+    )
+    expect(textarea.getAttribute('aria-describedby')?.split(' ')).toContain(
+      message.id,
+    )
+    expect(textarea).toHaveAttribute('aria-invalid', 'true')
+    expect(textarea).toHaveValue(MALFORMED_VTT)
+    await flush()
+    expect(uploadsMock.createMeetingUpload).not.toHaveBeenCalled()
+    expect(uploadsMock.storeTranscript).not.toHaveBeenCalled()
+  })
+
+  it('checks #28 first: text of only U+FEFF is missing', async () => {
+    setup()
+    await paste('\ufeff')
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Save transcript text' }),
+    )
+    expect(
+      await screen.findByText('Paste the transcript text.'),
+    ).toBeInTheDocument()
+    expect(uploadsMock.createMeetingUpload).not.toHaveBeenCalled()
+  })
+
+  it('a store failure offers Read again, which re-sends the same result with no second create', async () => {
+    setup()
+    uploadsMock.createMeetingUpload.mockResolvedValue(created())
+    uploadsMock.storeTranscript
+      .mockRejectedValueOnce(new UploadApiError('unknown'))
+      .mockResolvedValue(stored(20, 2, PASTED_ID))
+    await paste(VTT_TEXT)
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Save transcript text' }),
+    )
+    fireEvent.click(await screen.findByRole('button', { name: 'Read again' }))
+    await waitFor(() => {
+      expect(statusRegion()).toHaveTextContent('Transcript text saved.')
+    })
+    expect(uploadsMock.createMeetingUpload).toHaveBeenCalledTimes(1)
+    expect(uploadsMock.storeTranscript).toHaveBeenCalledTimes(2)
+    expect(uploadsMock.storeTranscript.mock.calls[0]).toEqual(
+      uploadsMock.storeTranscript.mock.calls[1],
+    )
+    expect(uploadsMock.fetchPastedTranscriptText).not.toHaveBeenCalled()
+  })
+})
+
+describe('Read transcript (#29)', () => {
+  it('shows Not read yet. and Read transcript only for uploaded transcript rows', async () => {
+    setup({
+      uploads: list(
+        transcriptItem(),
+        pastedItem(),
+        item({ uploadId: 'b1000000-0000-4000-8000-000000000041' }),
+        item({
+          uploadId: 'b1000000-0000-4000-8000-000000000042',
+          kind: 'video',
+          originalFilename: 'standup.mp4',
+          mimeType: 'video/mp4',
+        }),
+      ),
+    })
+    const items = await waitFor(() => {
+      const found = Array.from(
+        document.querySelectorAll<HTMLElement>('li[data-upload-id]'),
+      )
+      expect(found).toHaveLength(4)
+      return found
+    })
+    for (const entry of items.slice(0, 2)) {
+      expect(entry).toHaveTextContent('Not read yet.')
+      expect(
+        within(entry).getByRole('button', { name: 'Read transcript' }),
+      ).toBeInTheDocument()
+    }
+    for (const entry of items.slice(2)) {
+      expect(entry).not.toHaveTextContent('Not read yet.')
+      expect(
+        within(entry).queryByRole('button', { name: 'Read transcript' }),
+      ).toBeNull()
+    }
+  })
+
+  it('reads a file and announces {name} read.', async () => {
+    setup({ uploads: list(transcriptItem()) })
+    uploadsMock.downloadTranscriptFile.mockResolvedValue(bytesOf(VTT_TEXT))
+    uploadsMock.storeTranscript.mockResolvedValue(stored(20, 2))
+    const button = await screen.findByRole('button', {
+      name: 'Read transcript',
+    })
+    uploadsMock.fetchCycleUploads.mockResolvedValue(
+      list(
+        transcriptItem({
+          status: 'extracting',
+          transcriptLength: 20,
+          transcriptSegmentCount: 2,
+        }),
+      ),
+    )
+    fireEvent.click(button)
+    await waitFor(() => {
+      expect(statusRegion()).toHaveTextContent('standup.vtt read.')
+    })
+    expect(uploadsMock.downloadTranscriptFile).toHaveBeenCalledWith(VTT_PATH)
+    expect(uploadsMock.storeTranscript).toHaveBeenCalledTimes(1)
+    expect(uploadsMock.createMeetingUpload).not.toHaveBeenCalled()
+    expect(
+      screen.getByText('Transcript: 20 characters, 2 timed segments.'),
+    ).toBeInTheDocument()
+  })
+
+  it('reads pasted text back with get_pasted_transcript_text, then stores it', async () => {
+    setup({ uploads: list(pastedItem()) })
+    uploadsMock.fetchPastedTranscriptText.mockResolvedValue(
+      '\ufeffOne\r\n\r\n\r\nTwo',
+    )
+    uploadsMock.storeTranscript.mockResolvedValue(stored(8, 0, PASTED_ID))
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Read transcript' }),
+    )
+    await waitFor(() => {
+      expect(statusRegion()).toHaveTextContent('Pasted transcript text read.')
+    })
+    expect(uploadsMock.fetchPastedTranscriptText).toHaveBeenCalledWith(
+      PASTED_ID,
+    )
+    expect(uploadsMock.storeTranscript).toHaveBeenCalledWith(
+      PASTED_ID,
+      'One\n\nTwo',
+      [],
+    )
+    const [readOrder] =
+      uploadsMock.fetchPastedTranscriptText.mock.invocationCallOrder
+    const [storeOrder] = uploadsMock.storeTranscript.mock.invocationCallOrder
+    expect(readOrder).toBeLessThan(storeOrder)
+  })
+
+  it('is not offered before discuss', async () => {
+    setup({ status: 'vote', uploads: list(transcriptItem()) })
+    expect(await screen.findByText('Not read yet.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Read transcript' })).toBeNull()
+  })
+
+  it.each<[UploadErrorCode, string]>([
+    ['upload_not_transcript', 'This upload is not a transcript.'],
+    ['upload_not_ready', 'This upload cannot be read now.'],
+    [
+      'transcript_already_stored',
+      'A different transcript is already stored for this upload.',
+    ],
+    [
+      'invalid_transcript',
+      'The transcript could not be saved. Add it again as a new upload.',
+    ],
+    ['invalid_reject_reason', 'Something went wrong. Try again.'],
+    ['cycle_not_discussing', STAGE_SENTENCE],
+  ])('a store refused with %s shows its copy', async (code, message) => {
+    setup({ uploads: list(transcriptItem()) })
+    uploadsMock.downloadTranscriptFile.mockResolvedValue(bytesOf(VTT_TEXT))
+    uploadsMock.storeTranscript.mockRejectedValue(new UploadApiError(code))
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Read transcript' }),
+    )
+    await waitFor(() => {
+      expect(alertWith(message)).toBeDefined()
+    })
+    expect(statusRegion()).toHaveTextContent('')
+  })
+
+  it.each<UploadErrorCode>(['upload_not_found', 'transcript_already_stored'])(
+    '%s re-reads the list',
+    async (code) => {
+      setup({ uploads: list(transcriptItem()) })
+      uploadsMock.downloadTranscriptFile.mockResolvedValue(bytesOf(VTT_TEXT))
+      uploadsMock.storeTranscript.mockRejectedValue(new UploadApiError(code))
+      fireEvent.click(
+        await screen.findByRole('button', { name: 'Read transcript' }),
+      )
+      // Once on load, once when the read settles, once for the code.
+      await waitFor(() => {
+        expect(uploadsMock.fetchCycleUploads).toHaveBeenCalledTimes(3)
+      })
+    },
+  )
+
+  it('not_project_facilitator reaches the denied state', async () => {
+    setup({ uploads: list(transcriptItem()) })
+    uploadsMock.downloadTranscriptFile.mockResolvedValue(bytesOf(VTT_TEXT))
+    uploadsMock.storeTranscript.mockRejectedValue(
+      new UploadApiError('not_project_facilitator'),
+    )
+    const button = await screen.findByRole('button', {
+      name: 'Read transcript',
+    })
+    membersMock.fetchProjectMembers.mockResolvedValue(asFormerFacilitator)
+    fireEvent.click(button)
+    expect(await screen.findByText(DENIED)).toBeInTheDocument()
+  })
+
+  it('not_project_member reaches the not-found state', async () => {
+    setup({ uploads: list(transcriptItem()) })
+    uploadsMock.downloadTranscriptFile.mockResolvedValue(bytesOf(VTT_TEXT))
+    uploadsMock.storeTranscript.mockRejectedValue(
+      new UploadApiError('not_project_member'),
+    )
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Read transcript' }),
+    )
+    expect(await screen.findByText(NOT_FOUND)).toBeInTheDocument()
+  })
+})
+
+describe('one sequence per tab (#29)', () => {
+  it('while a read is pending, Upload, Save transcript text, Read again and every Read transcript send nothing', async () => {
+    setup({
+      uploads: list(
+        transcriptItem(),
+        pastedItem(),
+        transcriptItem({
+          uploadId: 'b1000000-0000-4000-8000-000000000023',
+          originalFilename: 'other.vtt',
+          storagePath: `${PROJECT_ID}/${CYCLE_ID}/b1000000-0000-4000-8000-000000000023.vtt`,
+        }),
+      ),
+    })
+    uploadsMock.downloadTranscriptFile.mockRejectedValueOnce(
+      new UploadApiError('transcript_download_failed'),
+    )
+    const [first] = await screen.findAllByRole('button', {
+      name: 'Read transcript',
+    })
+    fireEvent.click(first)
+    const readAgain = await screen.findByRole('button', { name: 'Read again' })
+
+    const download = deferred<Uint8Array>()
+    uploadsMock.downloadTranscriptFile.mockReturnValue(download.promise)
+    uploadsMock.storeTranscript.mockResolvedValue(stored(20, 2))
+    fireEvent.click(readAgain)
+    fireEvent.click(readAgain)
+    await waitFor(() => {
+      expect(readAgain).toHaveAttribute('aria-disabled', 'true')
+    })
+    expect(screen.getByText('Reading standup.vtt…')).toBeVisible()
+    for (const button of screen.queryAllByRole('button', {
+      name: 'Read transcript',
+    })) {
+      expect(button).toHaveAttribute('aria-disabled', 'true')
+      fireEvent.click(button)
+      fireEvent.click(button)
+    }
+    fireEvent.click(screen.getByRole('radio', { name: 'Transcript file' }))
+    choose(fileInput('Transcript file'), makeFile('more.vtt', 120))
+    fireEvent.click(screen.getByRole('button', { name: 'Upload' }))
+    fireEvent.click(
+      screen.getByRole('radio', { name: 'Paste transcript text' }),
+    )
+    fireEvent.change(screen.getByLabelText('Transcript text'), {
+      target: { value: 'Hello' },
+    })
+    const save = screen.getByRole('button', { name: 'Save transcript text' })
+    fireEvent.click(save)
+    fireEvent.click(save)
+    await flush()
+    expect(uploadsMock.downloadTranscriptFile).toHaveBeenCalledTimes(2)
+    expect(uploadsMock.fetchPastedTranscriptText).not.toHaveBeenCalled()
+    expect(uploadsMock.createMeetingUpload).not.toHaveBeenCalled()
+
+    download.resolve(bytesOf(VTT_TEXT))
+    await waitFor(() => {
+      expect(statusRegion()).toHaveTextContent('standup.vtt read.')
+    })
+    expect(uploadsMock.storeTranscript).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('leaving during a read (#29)', () => {
+  it('still stores once, then announces nothing, moves no focus and logs nothing', async () => {
+    const consoleError = vi.spyOn(console, 'error')
+    const consoleWarn = vi.spyOn(console, 'warn')
+    setup()
+    arrangeTranscriptFile()
+    const download = deferred<Uint8Array>()
+    uploadsMock.downloadTranscriptFile.mockReturnValue(download.promise)
+    uploadsMock.storeTranscript.mockResolvedValue(stored(20, 2))
+    await chooseTranscript()
+    fireEvent.click(screen.getByRole('button', { name: 'Upload' }))
+    await waitFor(() => {
+      expect(uploadsMock.downloadTranscriptFile).toHaveBeenCalledTimes(1)
+    })
+    fireEvent.click(screen.getByRole('link', { name: 'Back to board' }))
+    await waitFor(() => {
+      expect(screen.getByTestId('location')).toHaveTextContent(
+        `/cycles/${CYCLE_ID}/board`,
+      )
+    })
+    const focused = document.activeElement
+    download.resolve(bytesOf(VTT_TEXT))
+    await waitFor(() => {
+      expect(uploadsMock.storeTranscript).toHaveBeenCalledTimes(1)
+    })
+    await flush()
+    expect(document.activeElement).toBe(focused)
+    expect(
+      screen.queryByText('standup.vtt uploaded and read.'),
+    ).not.toBeInTheDocument()
+    expect(consoleError).not.toHaveBeenCalled()
+    expect(consoleWarn).not.toHaveBeenCalled()
+  })
+
+  it('still rejects once when the file cannot be parsed', async () => {
+    const consoleError = vi.spyOn(console, 'error')
+    setup()
+    arrangeTranscriptFile()
+    const download = deferred<Uint8Array>()
+    uploadsMock.downloadTranscriptFile.mockReturnValue(download.promise)
+    uploadsMock.rejectTranscriptUpload.mockResolvedValue({
+      uploadId: VTT_ID,
+      status: 'rejected',
+      errorCode: 'transcript_malformed',
+    })
+    await chooseTranscript()
+    fireEvent.click(screen.getByRole('button', { name: 'Upload' }))
+    await waitFor(() => {
+      expect(uploadsMock.downloadTranscriptFile).toHaveBeenCalledTimes(1)
+    })
+    fireEvent.click(screen.getByRole('link', { name: 'Back to board' }))
+    await waitFor(() => {
+      expect(screen.getByTestId('location')).toHaveTextContent(
+        `/cycles/${CYCLE_ID}/board`,
+      )
+    })
+    download.resolve(bytesOf(MALFORMED_VTT))
+    await waitFor(() => {
+      expect(uploadsMock.rejectTranscriptUpload).toHaveBeenCalledTimes(1)
+    })
+    await flush()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(consoleError).not.toHaveBeenCalled()
   })
 })

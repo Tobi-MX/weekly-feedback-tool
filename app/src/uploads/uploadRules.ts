@@ -5,6 +5,11 @@
  * table (pgTAP and `uploadRules.test.ts`).
  */
 
+import type {
+  TranscriptParseErrorCode,
+  TranscriptParseFormat,
+} from './transcriptParser'
+
 /** What a meeting record can be. */
 export const UPLOAD_KINDS = [
   'audio',
@@ -69,8 +74,15 @@ export const UPLOAD_MAX_BYTES: Readonly<Record<FileUploadKind, number>> = {
   transcript_file: TRANSCRIPT_FILE_MAX_BYTES,
 }
 
-/** Pasted transcript text, in characters (code points). */
+/**
+ * Pasted transcript text, and a stored transcript's text (#29), in
+ * characters (code points).
+ */
 export const TRANSCRIPT_TEXT_MAX_LENGTH = 200_000
+/** Timed segments of a stored transcript (#29). */
+export const TRANSCRIPT_MAX_SEGMENTS = 20_000
+/** The latest timestamp of a segment: 24 hours, in milliseconds (#29). */
+export const TRANSCRIPT_MAX_MS = 86_400_000
 /** A file name, after trimming spaces. */
 export const FILE_NAME_MAX_LENGTH = 255
 /** Uploads per cycle that are neither rejected nor abandoned. */
@@ -182,4 +194,70 @@ export function formatFileSize(bytes: number): string {
     return `${kb.toFixed(1)} KB`
   }
   return `${(kb / 1024).toFixed(1)} MB`
+}
+
+/** The kinds that hold a transcript (#29). */
+export type TranscriptUploadKind = Extract<
+  UploadKind,
+  'transcript_file' | 'transcript_text'
+>
+
+export function isTranscriptKind(
+  kind: UploadKind,
+): kind is TranscriptUploadKind {
+  return kind === 'transcript_file' || kind === 'transcript_text'
+}
+
+/**
+ * The format a transcript upload is parsed as (#29, decision 2): VTT and SRT
+ * files by their type, a plain file and pasted text by their content.
+ */
+export function formatForUpload(
+  kind: TranscriptUploadKind,
+  mimeType: string | null,
+): TranscriptParseFormat {
+  if (kind === 'transcript_file') {
+    if (mimeType === 'text/vtt') {
+      return 'vtt'
+    }
+    if (mimeType === 'application/x-subrip') {
+      return 'srt'
+    }
+  }
+  return 'auto'
+}
+
+/** The `error_code` of a transcript file the parser refused (#29, decision 8). */
+export const TRANSCRIPT_REJECT_REASONS = [
+  'transcript_bad_encoding',
+  'transcript_not_text',
+  'transcript_empty',
+  'transcript_malformed',
+  'transcript_no_cues',
+  'transcript_too_long',
+  'transcript_too_many_segments',
+] as const
+export type TranscriptRejectReason = (typeof TRANSCRIPT_REJECT_REASONS)[number]
+
+const REJECT_REASON_BY_PARSE_CODE: Readonly<
+  Record<TranscriptParseErrorCode, TranscriptRejectReason>
+> = {
+  bad_encoding: 'transcript_bad_encoding',
+  not_text: 'transcript_not_text',
+  empty: 'transcript_empty',
+  missing_header: 'transcript_malformed',
+  bad_timing_line: 'transcript_malformed',
+  bad_timestamp: 'transcript_malformed',
+  end_before_start: 'transcript_malformed',
+  out_of_order: 'transcript_malformed',
+  missing_blank_line: 'transcript_malformed',
+  no_cues: 'transcript_no_cues',
+  too_long: 'transcript_too_long',
+  too_many_segments: 'transcript_too_many_segments',
+}
+
+export function rejectReasonFor(
+  code: TranscriptParseErrorCode,
+): TranscriptRejectReason {
+  return REJECT_REASON_BY_PARSE_CODE[code]
 }
