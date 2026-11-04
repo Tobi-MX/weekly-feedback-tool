@@ -620,8 +620,8 @@ select is(
 
 select is(
   (select pg_get_constraintdef(c.oid) from pg_constraint c where c.conrelid = 'public.cycle_events'::regclass and c.conname = 'cycle_events_type_check'),
-  'CHECK ((type = ANY (ARRAY[''stage_changed''::text, ''clusters_changed''::text, ''notes_changed''::text])))',
-  'cycle_events_type_check allows stage_changed, clusters_changed, and notes_changed'
+  'CHECK ((type = ANY (ARRAY[''stage_changed''::text, ''clusters_changed''::text, ''notes_changed''::text, ''actions_changed''::text])))',
+  'cycle_events_type_check allows stage_changed, clusters_changed, notes_changed, and actions_changed (#26)'
 );
 select is(
   (select pg_get_constraintdef(c.oid) from pg_constraint c where c.conrelid = 'public.cycle_events'::regclass and c.conname = 'cycle_events_notes_changed_check'),

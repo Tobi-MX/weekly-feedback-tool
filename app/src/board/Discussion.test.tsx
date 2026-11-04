@@ -7,6 +7,7 @@ import type { ProjectMember } from '../projects/membersApi'
 import { deferred, mockRestoredSession } from '../test/authMock'
 import { boardMock } from '../test/boardMock'
 import { cyclesMock } from '../test/cyclesMock'
+import { actionsMock } from '../test/actionsMock'
 import { discussionMock } from '../test/discussionMock'
 import { membersMock } from '../test/membersMock'
 import { profileMock } from '../test/profileMock'
@@ -215,6 +216,11 @@ function setup(options: SetupOptions = {}) {
   discussionMock.fetchDiscussion.mockResolvedValue(
     options.discussion ?? discussionOf([], {}, board.clusters),
   )
+  // #26: discuss mode also reads the action items (none).
+  actionsMock.fetchCycleActions.mockResolvedValue({
+    cycleId: CYCLE_ID,
+    actions: [],
+  })
   return renderApp({ initialEntries: [PATH] })
 }
 
