@@ -16,6 +16,21 @@ The RLS suite lives in `app/tests/rls/` and is configured by
 `app/vitest.rls.config.ts`. It runs in Node, loads none of the unit-test setup
 (`src/setupTests.ts`) or mocks (`src/test/*Mock`), and `npm test` excludes it.
 
+## Transcript parser fixtures
+
+The parser (#29, `app/src/uploads/transcriptParser.ts`) is tested in
+`app/src/uploads/transcriptParser.test.ts`. Text cases live in
+`app/src/uploads/transcriptFixtures.ts` as `VTT_FIXTURES`, `SRT_FIXTURES` and
+`PLAIN_FIXTURES`: each has a `name`, an `input` string, the `format` it is
+parsed as (`auto`, `vtt` or `srt`), and the exact `expected` result
+(`{ format, text, segments }` or `{ code, line }`). Every fixture is checked
+for its result, the join rule (`text` is the segment texts joined with `\n`),
+and determinism.
+
+To add a case, append an entry to the right array; the test picks it up.
+Byte-level cases (encodings, byte order marks, invalid UTF-8) and the 10 MiB
+limit cases start from bytes and live in the test file itself.
+
 ## Edge Function tests
 
 The Deno tests live in `supabase/functions/cluster-feedback/tests/` and need
