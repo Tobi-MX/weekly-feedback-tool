@@ -164,7 +164,7 @@ select is(has_function_privilege('anon', 'private.is_project_member(uuid)', 'EXE
 select is(has_function_privilege('anon', 'private.is_project_facilitator(uuid)', 'EXECUTE'), false, 'anon cannot execute is_project_facilitator');
 select is(has_function_privilege('authenticated', 'private.set_updated_at()', 'EXECUTE'), false, 'authenticated still cannot execute set_updated_at');
 select is(has_function_privilege('authenticated', 'private.handle_new_user()', 'EXECUTE'), false, 'authenticated still cannot execute handle_new_user');
-select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'private' and has_function_privilege('authenticated', p.oid, 'EXECUTE')), 2, 'authenticated can execute exactly two private functions');
+select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'private' and has_function_privilege('authenticated', p.oid, 'EXECUTE')), 4, 'authenticated can execute exactly four private functions (#28 adds two Storage policy helpers)');
 select is((select (count(*) filter (where a.grantee = 0))::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace left join lateral aclexplode(p.proacl) a on true where n.nspname = 'private'), 0, 'PUBLIC can execute no private function');
 set local role authenticated;
 set local request.jwt.claims = '{"sub":"10000000-0000-4000-8000-000000000001","role":"authenticated"}';

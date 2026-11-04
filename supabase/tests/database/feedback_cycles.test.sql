@@ -147,7 +147,7 @@ select is((select proconfig from pg_proc where oid = 'private.guard_feedback_cyc
 select is(has_function_privilege('authenticated', 'private.guard_feedback_cycle_update()', 'EXECUTE'), false, 'authenticated cannot execute the guard function');
 select is(has_function_privilege('anon', 'private.guard_feedback_cycle_update()', 'EXECUTE'), false, 'anon cannot execute the guard function');
 select is((select (count(*) filter (where a.grantee = 0))::int from pg_proc p left join lateral aclexplode(p.proacl) a on true where p.oid = 'private.guard_feedback_cycle_update()'::regprocedure), 0, 'PUBLIC cannot execute the guard function');
-select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'private' and has_function_privilege('authenticated', p.oid, 'EXECUTE')), 2, 'authenticated can still execute exactly two private functions');
+select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'private' and has_function_privilege('authenticated', p.oid, 'EXECUTE')), 4, 'authenticated can still execute exactly four private functions (#28 adds two Storage policy helpers)');
 
 set local role service_role;
 insert into public.feedback_cycles (id, project_id, title, week_start)
