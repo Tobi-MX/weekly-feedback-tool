@@ -375,7 +375,13 @@ describe('fetchProjectActions', () => {
     ['a string', 'ok'],
   ]
 
-  it.each(invalid)('%s is unknown', async (_name, data, filters = ALL) => {
+  it.each(
+    invalid.map(([name, data, filters]) => ({
+      name,
+      data,
+      filters: filters ?? ALL,
+    })),
+  )('$name is unknown', async ({ data, filters }) => {
     createClientMock({ data, error: null })
     expect(await codeOf(fetchProjectActions(PROJECT_ID, filters))).toBe(
       'unknown',

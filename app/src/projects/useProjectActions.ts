@@ -54,6 +54,10 @@ export function useProjectActionsQuery(
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
     refetchInterval: PROJECT_ACTIONS_POLL_MS,
+    // Re-render on every read, even one that returns the same data, so the
+    // client-only Overdue label follows the viewer's local date (#26
+    // decision 6) after midnight.
+    notifyOnChangeProps: 'all',
   })
 }
 
