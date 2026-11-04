@@ -17,6 +17,8 @@ export const ACTION_ERROR_CODES = [
   'invalid_due_date',
   'invalid_action_status',
   'action_limit_reached',
+  // #27: get_project_actions with a filter it does not accept.
+  'invalid_action_filter',
 ] as const
 
 export type ActionErrorCode = (typeof ACTION_ERROR_CODES)[number] | 'unknown'
@@ -47,6 +49,8 @@ export const ADD_ACTION_FAILED_MESSAGE = 'Could not add the action item.'
 export const SAVE_ACTION_FAILED_MESSAGE = 'Could not save the action item.'
 export const STATUS_ACTION_FAILED_MESSAGE = 'Could not update the action item.'
 export const DELETE_ACTION_FAILED_MESSAGE = 'Could not delete the action item.'
+/** The copy for a failed action read (#26's board and #27's project page). */
+export const LOAD_ACTIONS_FAILED_MESSAGE = 'Could not load the action items.'
 
 const unknownCopy: Record<ActionWrite, string> = {
   create: ADD_ACTION_FAILED_MESSAGE,
@@ -106,7 +110,19 @@ export const ACTION_ERROR_MESSAGES: Record<
   },
   action_limit_reached: { ...unknownCopy, create: ACTION_LIMIT_MESSAGE },
   invalid_action_status: unknownCopy,
+  // Only get_project_actions raises it (#27); no write does.
+  invalid_action_filter: unknownCopy,
   unknown: unknownCopy,
+}
+
+/**
+ * The copy for a failed action read. Every code, `invalid_action_filter`
+ * (#27) included, gets `unknown`'s load copy; `not_project_member`
+ * additionally switches the page to its not-found state.
+ */
+export function actionLoadErrorMessage(code: ActionErrorCode): string {
+  void code
+  return LOAD_ACTIONS_FAILED_MESSAGE
 }
 
 /**

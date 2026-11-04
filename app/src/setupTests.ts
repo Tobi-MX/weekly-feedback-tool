@@ -12,6 +12,7 @@ import { resetCyclesMock } from './test/cyclesMock'
 import { resetDiscussionMock } from './test/discussionMock'
 import { resetMembersMock } from './test/membersMock'
 import { resetProfileMock } from './test/profileMock'
+import { resetProjectActionsMock } from './test/projectActionsMock'
 import { resetProjectsMock } from './test/projectsMock'
 import { resetVotesMock } from './test/votesMock'
 
@@ -124,6 +125,15 @@ vi.mock('./board/actionsApi', async (importOriginal) => {
   }
 })
 
+// The project action list read (#27) uses the same pattern, so no test
+// reaches get_project_actions. The constants stay real.
+vi.mock('./projects/projectActionsApi', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('./projects/projectActionsApi')>()
+  const { projectActionsMock: mock } = await import('./test/projectActionsMock')
+  return { ...actual, fetchProjectActions: mock.fetchProjectActions }
+})
+
 // jsdom lacks a few browser APIs that Radix and sonner feature-detect.
 if (typeof globalThis.ResizeObserver === 'undefined') {
   globalThis.ResizeObserver = class ResizeObserver {
@@ -168,6 +178,7 @@ beforeEach(() => {
   resetVotesMock()
   resetDiscussionMock()
   resetActionsMock()
+  resetProjectActionsMock()
   // Sonner keeps its toast queue outside React, so dismiss it between tests.
   toast.dismiss()
   // The QueryClient is a singleton in the app; reset it between tests so one

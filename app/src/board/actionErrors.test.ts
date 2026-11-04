@@ -5,6 +5,7 @@ import {
   ActionApiError,
   actionErrorCodeOf,
   actionErrorMessage,
+  actionLoadErrorMessage,
   toActionErrorCode,
   type ActionErrorCode,
   type ActionWrite,
@@ -79,6 +80,13 @@ const TABLE: Record<ActionErrorCode, Record<ActionWrite, string | null>> = {
     status: STATUS_UNKNOWN,
     delete: DELETE_UNKNOWN,
   },
+  // #27: raised only by get_project_actions; every write column is unknown's.
+  invalid_action_filter: {
+    create: CREATE_UNKNOWN,
+    edit: EDIT_UNKNOWN,
+    status: STATUS_UNKNOWN,
+    delete: DELETE_UNKNOWN,
+  },
   unknown: {
     create: CREATE_UNKNOWN,
     edit: EDIT_UNKNOWN,
@@ -90,7 +98,7 @@ const TABLE: Record<ActionErrorCode, Record<ActionWrite, string | null>> = {
 const WRITES: readonly ActionWrite[] = ['create', 'edit', 'status', 'delete']
 
 describe('actionErrors', () => {
-  it('lists exactly the eleven codes', () => {
+  it("lists exactly #26's eleven codes and #27's invalid_action_filter", () => {
     expect([...ACTION_ERROR_CODES]).toEqual([
       'not_project_member',
       'not_action_editor',
@@ -103,7 +111,17 @@ describe('actionErrors', () => {
       'invalid_due_date',
       'invalid_action_status',
       'action_limit_reached',
+      'invalid_action_filter',
     ])
+  })
+
+  it('invalid_action_filter gets the load error copy, the same as unknown', () => {
+    expect(actionLoadErrorMessage('invalid_action_filter')).toBe(
+      'Could not load the action items.',
+    )
+    expect(actionLoadErrorMessage('unknown')).toBe(
+      'Could not load the action items.',
+    )
   })
 
   it.each(
