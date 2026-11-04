@@ -798,9 +798,7 @@ export function DiscussMode({
       {results}
       <ActionItems
         board={board}
-        topics={
-          agenda ? agenda.map((item) => item.cluster) : board.clusters
-        }
+        topics={agenda ? agenda.map((item) => item.cluster) : board.clusters}
         members={members}
         isFacilitator={isFacilitator}
         refetchInterval={refetchInterval}

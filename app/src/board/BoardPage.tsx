@@ -614,7 +614,9 @@ function BoardScreen({ cycleId }: { cycleId: string }) {
           onRefetchMembers={refetchMembers}
           refetchInterval={refetchInterval}
           members={
-            membersQuery.isSuccess ? (membersQuery.data ?? undefined) : undefined
+            membersQuery.isSuccess
+              ? (membersQuery.data ?? undefined)
+              : undefined
           }
           ai={ai}
         />
