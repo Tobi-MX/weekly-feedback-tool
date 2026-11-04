@@ -1642,3 +1642,56 @@ describe('access, loading, and errors', () => {
     expect(boardMock.fetchCycleBoard.mock.calls.length).toBe(calls)
   })
 })
+
+describe('meeting record link (#28)', () => {
+  it.each<CycleStatus>(['discuss', 'closed'])(
+    'the facilitator sees Upload meeting record in %s',
+    async (status) => {
+      setup({ board: boardOf(status) })
+      const link = await screen.findByRole('link', {
+        name: 'Upload meeting record',
+      })
+      expect(link).toHaveAttribute('href', `/cycles/${CYCLE_ID}/upload`)
+    },
+  )
+
+  it.each<CycleStatus>(['collecting', 'reveal', 'cluster', 'vote'])(
+    'the facilitator sees no link in %s',
+    async (status) => {
+      setup({ board: boardOf(status) })
+      expect(
+        await screen.findByRole('link', { name: 'Back to project' }),
+      ).toBeInTheDocument()
+      await waitFor(() => {
+        expect(membersMock.fetchProjectMembers).toHaveBeenCalled()
+      })
+      expect(
+        screen.queryByRole('link', { name: 'Upload meeting record' }),
+      ).not.toBeInTheDocument()
+    },
+  )
+
+  it.each<[string, ProjectMember[]]>([
+    ['a member', asMember],
+    ['the owner who is not the facilitator', asFormerFacilitator],
+  ])('%s sees no link in discuss or closed', async (_who, members) => {
+    for (const status of ['discuss', 'closed'] as const) {
+      const view = setup({ board: boardOf(status), members })
+      expect(
+        await screen.findByRole('link', { name: 'Back to project' }),
+      ).toBeInTheDocument()
+      await waitFor(() => {
+        expect(membersMock.fetchProjectMembers).toHaveBeenCalled()
+      })
+      await act(async () => {
+        await Promise.resolve()
+      })
+      expect(
+        screen.queryByRole('link', { name: 'Upload meeting record' }),
+      ).not.toBeInTheDocument()
+      view.unmount()
+      queryClient.clear()
+      membersMock.fetchProjectMembers.mockClear()
+    }
+  })
+})
