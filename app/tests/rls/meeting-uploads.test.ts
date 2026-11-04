@@ -106,15 +106,14 @@ async function discussCycle(
     { p_cycle_id: cycle.id, p_name: 'Topic' },
   )
   expectRows(cluster, 1)
-  const toVote: DbResult<StageRow[]> = await owner.client.rpc(
-    'advance_stage',
-    { p_cycle_id: cycle.id, p_from_status: 'cluster' },
-  )
+  const toVote: DbResult<StageRow[]> = await owner.client.rpc('advance_stage', {
+    p_cycle_id: cycle.id,
+    p_from_status: 'cluster',
+  })
   expect(expectRows(toVote, 1)[0].status).toBe('vote')
-  const closed: DbResult<StageRow[]> = await owner.client.rpc(
-    'close_voting',
-    { p_cycle_id: cycle.id },
-  )
+  const closed: DbResult<StageRow[]> = await owner.client.rpc('close_voting', {
+    p_cycle_id: cycle.id,
+  })
   expect(expectRows(closed, 1)[0].status).toBe('discuss')
   return cycle.id
 }
@@ -233,9 +232,11 @@ async function uploadedFile(
       new Blob([bytes(size)], { type: row.mime_type }),
     ),
   ).toBeNull()
-  expect(expectRows(await completeUpload(user.client, row.upload_id), 1)).toEqual(
-    [{ upload_id: row.upload_id, status: 'uploaded', error_code: null }],
-  )
+  expect(
+    expectRows(await completeUpload(user.client, row.upload_id), 1),
+  ).toEqual([
+    { upload_id: row.upload_id, status: 'uploaded', error_code: null },
+  ])
   return row.storage_path
 }
 
@@ -278,9 +279,11 @@ describe('meeting uploads', () => {
     )
     expect(uploaded.error).toBeNull()
 
-    expect(expectRows(await completeUpload(a.client, row.upload_id), 1)).toEqual(
-      [{ upload_id: row.upload_id, status: 'uploaded', error_code: null }],
-    )
+    expect(
+      expectRows(await completeUpload(a.client, row.upload_id), 1),
+    ).toEqual([
+      { upload_id: row.upload_id, status: 'uploaded', error_code: null },
+    ])
 
     const url = await bucket.createSignedUrl(row.storage_path, 60)
     expect(url.error).toBeNull()
@@ -324,7 +327,9 @@ describe('meeting uploads', () => {
     const { owner: a, memberA: b, memberB: d, nonMember: c, cycleId } = roles
     const uploadedPath = await uploadedFile(a, cycleId)
     const pending = await registered(a, cycleId, 'later.mp3', 16)
-    const uploadedId = (await listUploads(a.client, cycleId)).data?.uploads.find(
+    const uploadedId = (
+      await listUploads(a.client, cycleId)
+    ).data?.uploads.find(
       (item) => item.storage_path === uploadedPath,
     )?.upload_id
     expect(uploadedId).toBeDefined()
@@ -500,15 +505,15 @@ describe('meeting uploads', () => {
         new Blob([bytes(32)], { type: 'audio/mpeg' }),
       ),
     ).toBeNull()
-    expect(expectRows(await completeUpload(a.client, big.upload_id), 1)).toEqual(
-      [
-        {
-          upload_id: big.upload_id,
-          status: 'rejected',
-          error_code: 'upload_file_mismatch',
-        },
-      ],
-    )
+    expect(
+      expectRows(await completeUpload(a.client, big.upload_id), 1),
+    ).toEqual([
+      {
+        upload_id: big.upload_id,
+        status: 'rejected',
+        error_code: 'upload_file_mismatch',
+      },
+    ])
 
     const typed = await registered(a, cycleId, 'typed.mp3', 16)
     expect(
