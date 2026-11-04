@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -9,6 +9,7 @@ import {
   projectMembersQueryKey,
   useProjectMembersQuery,
 } from '@/projects/useMembers'
+import { projectActionsPrefix } from '@/projects/useProjectActions'
 import { projectQueryKey } from '@/projects/useProjects'
 import { CreateCycleForm } from './CreateCycleForm'
 import type { CycleSubmissionStatus, CycleSummary } from './cyclesApi'
@@ -346,8 +347,17 @@ function PastCycles({ cycles }: { cycles: readonly CycleSummary[] }) {
   )
 }
 
+interface ProjectCyclesProps {
+  readonly projectId: string
+  /**
+   * Rendered between Current cycle and Past cycles (#27's Action items),
+   * whatever state the cycles query is in.
+   */
+  readonly between?: ReactNode
+}
+
 /** The project page's "Current cycle" and "Past cycles" sections. */
-export function ProjectCycles({ projectId }: { projectId: string }) {
+export function ProjectCycles({ projectId, between }: ProjectCyclesProps) {
   const { user } = useAuth()
   const userId = user?.id ?? null
   const queryClient = useQueryClient()
@@ -374,12 +384,16 @@ export function ProjectCycles({ projectId }: { projectId: string }) {
   const invalidateStage = useInvalidateCycleStage(projectId)
 
   // One live cycle_events channel while there is an open cycle. Each event,
-  // and each SUBSCRIBED (so a missed event is caught up), re-reads the cycles
-  // and the status. Nothing is read from the message, and nothing polls.
+  // and each SUBSCRIBED (so a missed event is caught up), re-reads the cycles,
+  // the status, and the project's action items (#27). Nothing is read from
+  // the message. Only the action list polls (its own 30 s interval).
   useCycleEvents(currentId, () => {
     if (currentId !== null) {
       void invalidateStage(currentId)
     }
+    void queryClient.invalidateQueries({
+      queryKey: projectActionsPrefix(userId, projectId),
+    })
   })
 
   // TanStack re-reads on visibilitychange; also re-read the cycles when the
@@ -476,6 +490,8 @@ export function ProjectCycles({ projectId }: { projectId: string }) {
           </div>
         ) : null}
       </section>
+
+      {between}
 
       {cyclesQuery.isSuccess && cycles ? (
         <section aria-labelledby="past-cycles-heading" className="space-y-3">

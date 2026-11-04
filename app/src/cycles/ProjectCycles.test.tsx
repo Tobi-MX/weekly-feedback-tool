@@ -767,7 +767,7 @@ describe('Project page live update', () => {
     })
   })
 
-  it('sets no polling interval and stores nothing from an event', async () => {
+  it('sets no polling interval (except the action list 30 s poll) and stores nothing from an event', async () => {
     const setItem = vi.spyOn(Storage.prototype, 'setItem')
     renderPage({ status: statusOf() })
     await screen.findByText('Collecting feedback')
@@ -782,9 +782,17 @@ describe('Project page live update', () => {
       expect(cyclesMock.fetchProjectCycles.mock.calls.length).toBeGreaterThan(1)
     })
 
-    for (const query of queryClient.getQueryCache().getAll()) {
-      const options = query.options as { refetchInterval?: unknown }
-      expect(options.refetchInterval).toBeUndefined()
+    // #27's decision 7: only the project action list polls, every 30 s.
+    const intervals = queryClient
+      .getQueryCache()
+      .getAll()
+      .map((query) => {
+        const options = query.options as { refetchInterval?: unknown }
+        return [query.queryKey[0], options.refetchInterval] as const
+      })
+    expect(intervals.some(([key]) => key === 'project-actions')).toBe(true)
+    for (const [key, interval] of intervals) {
+      expect(interval).toBe(key === 'project-actions' ? 30_000 : undefined)
     }
     expect(setItem).not.toHaveBeenCalled()
   })
