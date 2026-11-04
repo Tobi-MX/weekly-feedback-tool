@@ -141,9 +141,10 @@
 -- Events. One actions_changed row per distinct cycle for every statement that
 -- changes actions, with the cycle's current status. A statement that changes
 -- no row, or a cascade from a deleted cycle, records nothing. An auth-user
--- deletion that sets owner_id or created_by to null records one row per
--- affected cycle for each of the two foreign keys it cascades through. No RPC
--- inserts into cycle_events itself.
+-- deletion that sets owner_id or created_by to null records exactly one row
+-- per affected cycle, even when it cascades through both foreign keys:
+-- Postgres fires the transition-table statement trigger once for the
+-- cascaded updates of one deletion. No RPC inserts into cycle_events itself.
 --
 -- Unchanged: get_cycle_board, get_vote_totals, close_voting,
 -- get_cycle_discussion, #25's write RPCs, record_notes_change,
