@@ -748,8 +748,8 @@ select is(
 );
 select is(
   (select array_agg(p.proname::text order by p.proname) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname in ('public', 'private') and p.prosrc ~ 'public\.actions'),
-  array['create_action', 'delete_action', 'get_cycle_actions', 'set_action_status', 'update_action'],
-  'only the five RPCs read or write public.actions'
+  array['create_action', 'delete_action', 'get_cycle_actions', 'get_project_actions', 'set_action_status', 'update_action'],
+  'only the five RPCs and #27''s get_project_actions read or write public.actions'
 );
 
 -- ---------------------------------------------------------------------------
