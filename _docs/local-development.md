@@ -244,6 +244,46 @@ Every error is `{ "error": { "code", "message" } }` with a fixed message.
 | 500  | `ai_not_configured`           | `ANTHROPIC_API_KEY` is not set.                                                          |
 | 500  | `internal_error`              | Anything else, including a rejected write payload and Anthropic 400/401/403/404.         |
 
+## Meeting uploads and Storage
+
+The meeting record (#28) is stored in the private `meeting-media` Storage
+bucket, which the migration
+`supabase/migrations/20261104120000_create_meeting_uploads.sql` creates
+(`public = false`, 200 MiB per object, the 11 accepted MIME types). The
+browser uploads straight to it through signed upload URLs; no file passes
+through the app or an Edge Function.
+
+Storage caps every bucket at the project-wide upload limit.
+`supabase/config.toml` raises it to 200 MiB:
+
+```toml
+[storage]
+file_size_limit = "200MiB"
+```
+
+After changing it, restart the stack so Storage reads it:
+
+```bash
+supabase stop && supabase start
+```
+
+`docker exec supabase_storage_weekly-feedback-tool env | grep FILE_SIZE_LIMIT`
+then shows `209715200`. A hosted project must allow at least 200 MiB under
+Storage settings (the Free plan's 50 MB is too low); below that, Storage
+refuses bigger files with 413 and the page says the file is too large.
+Hosted settings are #43.
+
+To inspect uploads locally, open Studio at <http://127.0.0.1:54323>:
+
+- **Table Editor → `meeting_uploads`** shows the registered rows, their
+  status, path, and error code.
+- **Storage → `meeting-media`** shows the objects under
+  `{project_id}/{cycle_id}/{upload_id}.{ext}`.
+
+The SQL editor runs the read-only orphan query in
+[tech-stack.md](tech-stack.md) §12. Objects cannot be deleted from the app;
+`npm run test:rls` removes its own objects in teardown.
+
 ## Local ports
 
 | Service         | URL / port               |

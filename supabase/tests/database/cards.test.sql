@@ -198,7 +198,7 @@ select is(has_function_privilege('anon', 'private.guard_card_update()', 'EXECUTE
 select is(has_function_privilege('authenticated', 'private.guard_card_author_update()', 'EXECUTE'), false, 'authenticated cannot execute guard_card_author_update');
 select is(has_function_privilege('anon', 'private.guard_card_author_update()', 'EXECUTE'), false, 'anon cannot execute guard_card_author_update');
 select is((select (count(*) filter (where a.grantee = 0))::int from pg_proc p left join lateral aclexplode(p.proacl) a on true where p.oid in ('private.guard_card_update()'::regprocedure, 'private.guard_card_author_update()'::regprocedure)), 0, 'PUBLIC cannot execute either guard');
-select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'private' and has_function_privilege('authenticated', p.oid, 'EXECUTE')), 2, 'authenticated can still execute exactly two private functions');
+select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'private' and has_function_privilege('authenticated', p.oid, 'EXECUTE')), 4, 'authenticated can still execute exactly four private functions (#28 adds two Storage policy helpers)');
 
 -- ---------------------------------------------------------------------------
 -- RLS, policies, grants, and Realtime.

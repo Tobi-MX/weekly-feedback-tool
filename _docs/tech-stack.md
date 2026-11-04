@@ -187,6 +187,15 @@ Audio/video transcription is delegated to a managed speech-to-text API. Running 
 - Action writes broadcast `actions_changed` (no actor, payload `{}`, no id, text, name, or count); actions are attributed, so their timing reveals nothing hidden.
 - The project-wide read is `get_project_actions` (#27): member-only, `security definer`, with the status filter, "Assigned to me", and the 200 open / 20 done limits applied in the database; the browser never fetches all actions to filter them. It adds no table privilege, policy, view, or publication entry.
 
+**Meeting uploads (#28)**
+
+- Register, upload, complete. `create_meeting_upload` validates the request and inserts a `pending_upload` row with a server-generated path. The browser asks Storage for a signed upload URL for exactly that path (`createSignedUploadUrl`) and uploads straight to the private `meeting-media` bucket (`uploadToSignedUrl`); Storage signs it only under the facilitator-only `INSERT` policy. `complete_meeting_upload` checks the stored object and sets `uploaded` or `rejected`. A Postgres RPC cannot sign Storage URLs, so no RPC returns a URL or token; the token lives only in the upload call's memory and is never logged, cached, or put in a URL or browser storage. No Edge Function and no service-role key are involved.
+- The path never contains the file name: `storage_path` is `{project_id}/{cycle_id}/{upload_id}.{ext}` (lowercase UUIDs, the lowercased allowlisted extension); the original name is kept in `original_filename` for display only. The Storage policies match `name = meeting_uploads.storage_path` exactly, so a traversal (`../`), an encoded or upper-cased variant, another project's prefix, or an unregistered name never matches.
+- Who and when: only the project's **current** facilitator registers, completes, lists, and reads. Registering and completing work only while the cycle is `discuss` or `closed` (`cycle_not_discussing`); listing works in every stage. Members, the project owner when not the facilitator, non-members, and `anon` get nothing; members read the published summary (#36), not the meeting record.
+- Completion checks the real object in `storage.objects` (bucket `meeting-media`, `name = storage_path`): no object raises `upload_file_missing` and changes nothing (after 24 hours the row becomes `rejected` / `upload_abandoned`); a `metadata` size or mimetype that differs from the row makes it `rejected` / `upload_file_mismatch`; otherwise it is `uploaded`. Any other status is a no-op that returns the row.
+- No overwrite and no client delete: `storage.objects` has exactly two policies for the bucket, `meeting_media_insert_facilitator` (`INSERT` for a `pending_upload` row less than 24 hours old, current facilitator, cycle in `discuss` / `closed`) and `meeting_media_select_facilitator` (`SELECT` for any registered row, current facilitator), through `private.can_upload_meeting_object` and `private.can_read_meeting_object`. With no `UPDATE` or `DELETE` policy, upsert, overwrite, move, and remove are refused. A copy needs an `INSERT` on its destination, so it is refused everywhere except a registered `pending_upload` path, where it is the same as uploading there and completion still checks the object.
+- Orphaned objects are documented, not deleted: a `rejected` row's object, an upload that lands after its row was abandoned, and an object left by a cycle or project an operator deleted (the row cascades, the object stays). §12 lists them; deleting them is #44's runbook, and in-product removal is #116.
+
 **Facilitator actions**
 
 - Roles live in `project_members.role`.
@@ -255,7 +264,7 @@ Names are indicative; exact columns will be finalized with migrations.
 
 | Table | Purpose |
 |---|---|
-| `meeting_uploads` | Kind (`audio` / `video` / `transcript_file` / `transcript_text`), storage path or pasted text, processing status, provider job ID |
+| `meeting_uploads` | One meeting record of a cycle (#28): `id`, `cycle_id` (cascade), `kind` (`audio`, `video`, `transcript_file`, `transcript_text`), `status` (`pending_upload`, `uploaded`, `transcribing`, `extracting`, `draft_ready`, `confirmed`, `published`, `failed`, `rejected`), `storage_path` (unique), `original_filename`, `mime_type`, `size_bytes`, `pasted_text`, `error_code` (`^[a-z_]{1,64}$`), `error_message` (1–500, #30–#32), `provider_job_id` (1–200, #30), `created_by` (set null), `created_at`, `updated_at`, `uploaded_at`; index on (`cycle_id`, `created_at`). CHECKs: file kinds carry every file field and no text, `transcript_text` the reverse and never `pending_upload`; `size_bytes` from 1 to 200 MiB (10 MiB for transcript files); (`kind`, `mime_type`) from §16 question 9's table; text 1–200,000 characters with a non-whitespace character; a file name of 1–255 characters; `uploaded_at` null exactly in `pending_upload` and `rejected`. Guard `meeting_uploads_guard_update`: `id`, `cycle_id`, `kind`, the file fields, `pasted_text`, and `created_at` never change and `created_by` only to null (`meeting_upload_immutable_column`); `pending_upload` ends in `uploaded` or `rejected`, nothing returns to `pending_upload`, and `rejected` is terminal (`invalid_meeting_upload_transition`). Default-deny: RLS with no policy, no privilege for `PUBLIC`, `anon`, or `authenticated`, only `service_role` keeps `select, insert, update, delete`; not in Realtime, no view. Files live in the private `meeting-media` Storage bucket (`public = false`, `file_size_limit` 209,715,200, `allowed_mime_types` the 11 canonical types) |
 | `transcripts` | Full text plus timestamped segments |
 | `extracted_items` | Draft decisions/actions: description, owner guess, due date guess, evidence quote, timestamp, confidence, status |
 | `ai_runs` | One row per AI run (#20): `id`, `cycle_id` (cascade), `function_name` (`cluster-feedback`; #32 and #35 extend the CHECK), `model` (requested), `response_model` (the model that answered, a fallback model after a refusal), `prompt_version`, `status` (`running`, `succeeded`, `failed`, `skipped`), `error_code`, `provider_called`, `provider_request_id`, `provider_status`, `input_tokens`, `output_tokens`, `duration_ms`, `card_count`, `cluster_count`, `started_at`, `finished_at`. At most one `running` row per cycle and function (partial unique index). Server-only: RLS with no policy, only `service_role` may select, insert, and update, not in Realtime. No card text, prompt, output, name, card id, author, or user id. The run's cluster-state fingerprint is kept beside it in `private.ai_run_fingerprints` while it runs |
@@ -310,7 +319,9 @@ All RPCs validate the caller's membership and the current cycle stage.
 | `accept_ai_clusters` | Keep (#21). Facilitator only (19b); the owner gets nothing extra. Takes `p_cycle_id`, returns the number of clusters kept. Same lock order as #100: membership check, then the `projects` row `FOR SHARE`, then the facilitator check, then the cycle row `FOR UPDATE`; `cluster` stage only. Sets every `source = 'ai'` cluster of the cycle to `manual` (ids, names, order and cards unchanged); a second call returns 0 and changes nothing. Errors: `not_project_member` (42501, also for an unknown cycle), `not_project_facilitator` (42501), `cycle_not_clustering`. It inserts no event and records no actor; #17's statement trigger records one `clusters_changed` row when a cluster changed, which also makes an in-flight AI run fail with `clusters_changed_during_run` |
 | `close_voting` | `(p_cycle_id uuid)` returns `(id, status, voting_closed_at)` (#24). Facilitator only; the owner gets nothing extra. Lock order as `advance_stage`: membership, the `projects` row `FOR SHARE`, the facilitator check, then the cycle row `FOR UPDATE`. In `vote` it sets `discuss` and `voting_closed_at = now()`; in `discuss` it is a no-op that returns the current row with the same `voting_closed_at` (idempotent). Errors: `not_project_member` (42501, also for a null or unknown cycle), `not_project_facilitator` (42501), `stage_out_of_date` (any other status). It never reads votes and inserts no event; #14's trigger records one `stage_changed` row with `actor_id` null. Voting also closes automatically on the vote that gives every member all 3 (§4.3) |
 | `set_discussion_status` | `(p_cluster_id uuid, p_status text)` returns `(cluster_id, discussion_status)` (#25). Facilitator only; the owner gets nothing extra. Lock order as #16: membership, the `projects` row `FOR SHARE`, the facilitator check, then the cycle row `FOR UPDATE`; `discuss` only. Errors in order: `not_project_member` (null user), `cluster_not_found` (null or unknown cluster, or a non-member), `not_project_facilitator` (42501), `cycle_not_discussing`, `invalid_discussion_status`. The current value is a no-op (no `updated_at`, no event); a change records one `clusters_changed` row through #17's trigger |
-| `create_meeting_upload` | Register upload and issue a signed storage URL |
+| `create_meeting_upload` | `(p_cycle_id uuid, p_kind text, p_filename text, p_size_bytes bigint, p_pasted_text text)` returns `(upload_id, kind, status, storage_path, mime_type)` (#28). Registers the upload; it issues no URL: the browser then gets the signed upload URL from Storage under the facilitator-only insert policy (§4.3). Lock order as `close_voting`: membership, `projects` `FOR SHARE`, facilitator, the cycle `FOR UPDATE`. Checks in order: `not_project_member` (42501; null user, null or unknown cycle, non-member), `not_project_facilitator` (42501), `cycle_not_discussing` (not `discuss` / `closed`), `invalid_upload_kind`, then for file kinds `invalid_transcript_text` (text given), `invalid_upload_file` (name rules, extension not in the kind's list, null or non-positive size) and `upload_too_large`, and for `transcript_text` `invalid_upload_file` (a name or size given) and `invalid_transcript_text` (null, blank, over 200,000 characters); then it marks the cycle's `pending_upload` rows older than 24 hours with no object `rejected` / `upload_abandoned` and refuses with `upload_limit_reached` at 20 active (neither rejected nor abandoned) or 50 total rows. File kinds get `pending_upload`, the path, and the canonical MIME type; text gets `uploaded` with `uploaded_at`, and null path and type |
+| `complete_meeting_upload` | `(p_upload_id uuid)` returns `(upload_id, status, error_code)` (#28). Checks in order: `not_project_member` (42501, null user), `upload_not_found` (null or unknown upload, or a non-member), `not_project_facilitator` (42501, after `projects` `FOR SHARE`), the cycle `FOR UPDATE` and a re-read (`upload_not_found`), `cycle_not_discussing`. Then §4.3's completion rules: `upload_file_missing` (no object, row under 24 hours old, nothing changes), `rejected` / `upload_abandoned`, `rejected` / `upload_file_mismatch`, or `uploaded`; any other status returns the row unchanged |
+| `get_cycle_uploads` | `(p_cycle_id uuid)` returns `jsonb` with exactly `cycle_id` and `uploads` (#28), ordered by `created_at` desc, then `upload_id`, each with exactly `upload_id`, `kind`, `status`, `original_filename`, `mime_type`, `size_bytes`, `text_length` (characters of pasted text, else null), `storage_path`, `error_code`, `error_message`, `created_at`, `uploaded_at`, `updated_at`. Facilitator only, every stage; `stable`, no lock, no write. Errors: `not_project_member` (42501), `not_project_facilitator` (42501). Never returns `pasted_text`, `created_by`, or `provider_job_id` |
 | `confirm_extracted_items` | Promote draft decisions/actions into confirmed records |
 | `publish_summary` | Freeze and publish the retrospective summary |
 | `assign_facilitator` | Transfer the facilitator role |
@@ -421,13 +432,17 @@ Rules:
 | `/projects/:id` | Project page: current cycle, submission status, retrospective, Action items |
 | `/cycles/:id/feedback` | Start / Stop / Continue form with per-card anonymity |
 | `/cycles/:id/board` | Retrospective board: reveal, cluster, vote, discuss |
-| `/cycles/:id/upload` | Meeting upload and processing status |
+| `/cycles/:id/upload` | Meeting record: upload a recording or transcript, or paste text, and see the uploads (#28) |
 | `/cycles/:id/summary` | Published retrospective summary |
 
 ### Project page
 
 - Action items (#27, `ProjectActions.tsx`, `projectActionsApi.ts`, `useProjectActions.ts`): a section with the `h2` **Action items** between Current cycle and Past cycles, independent of both (a failure of one never hides the other). It always shows a `Show` group of **Open**, **Done**, **All** (`aria-pressed`) and a native **Assigned to me** checkbox; filters start on Open with the checkbox off, are local UI state (nothing in the URL or storage), keep focus on the control, and re-read with `Loading action items…` until the answer. Open shows **Open (N)**, Done shows **Done (M)**, All shows both in that order (`h3`s with `tabIndex={-1}`, counts from `open_count` / `done_count`), with "Showing 200 of N open action items." or "Showing the 20 most recently completed of M." when a total is above what was returned. Items keep the server's order and show the description (line breaks kept), `Owner: {name}` (` (you)`, or `Deleted account`), `Due {date}` with ` · Overdue` as text or `No due date`, `Topic: {name}` or `No related topic`, `Retrospective: {title}` (a link to the board only while that cycle is in `discuss`), and `Status: Open` or `Status: Done · Completed {date}`. Empty copy: "No open action items." / "No completed action items yet.", their "… are assigned to you." forms, and for All with both totals 0 "No action items yet. They are added on the retrospective board during the Discuss stage." or "No action items are assigned to you." with no lists. Loading and "Could not load the action items." with Retry are local to the section; `not_project_member` shows the page's not-found state.
 - **Mark done** / **Reopen** (named `Mark done: {excerpt}` / `Reopen: {excerpt}`) render for the action's owner and the facilitator only (own actions only while the members load or have failed); there is no Edit or Delete here. Writes go through #26's `set_action_status`, are non-optimistic and one at a time (`aria-disabled`, "Updating…", a synchronous ref guard; filters stay usable), and settle after the awaited invalidation of the project-actions prefix and that cycle's `cycle-actions` key. The keyed sr-only status region then announces "Action item marked done." / "Action item reopened.", and focus goes to the item's new toggle if it is still shown, else to the `h3` of the list it left, only if focus was still on the toggle or on `<body>`. Errors are toasts with #26's "Done / Reopen" copy and re-read the list; `not_action_owner` also re-reads the members, `not_project_member` shows the not-found state. A refetch or role change that removes a focused item or toggle moves focus to its list's `h3` (or the `h2` when the list is gone). A write that settles after navigation announces nothing and moves no focus.
+
+### Upload page
+
+- Upload page (#28, `app/src/uploads/`): the `h1` **Meeting record** with the cycle title, week, **Back to board** and **Back to project**. States in order: `Loading the meeting record…`; the board's not-found state for an unknown cycle, a non-UUID id or a non-member; `Could not check your role.` with Retry; for anyone but the current facilitator (the owner included) only the denied copy, with `get_cycle_uploads` never called; for the facilitator before `discuss` the stage sentence and the list; in `discuss` and `closed` the form and the list. The board's header links to it (**Upload meeting record**) for the facilitator in `discuss` and `closed`. The form has native radios (Audio recording, Video recording, Transcript file, Paste transcript text) with their hints, one native file input per kind with `accept`, and a textarea; client checks run on submit only and mirror `uploadRules.ts`, the only client copy of the allowlists. A file goes register → signed upload → complete, one at a time per tab (`aria-disabled`, `Uploading {name}…`, a synchronous ref guard), and settles after the awaited invalidation of `['meeting-uploads', userId, cycleId]`; a failure after registration offers **Retry upload** for the same row. There is no byte progress (#117). The list shows each upload's name (or `Pasted transcript text`), kind, size or characters, status as text, rejected reason, and `Added {date}`; a `pending_upload` row not being uploaded in this tab offers **Check again**.
 
 ### Board behavior
 
@@ -470,9 +485,9 @@ Rules:
 
 `meeting_uploads.status` drives the UI:
 
-`uploaded` → `transcribing` → `extracting` → `draft_ready` → `confirmed` / `published`
+`pending_upload` → `uploaded` → `transcribing` → `extracting` → `draft_ready` → `confirmed` / `published`
 
-Plus `failed` with an error message on each processing step.
+Plus `failed` with an error message on each processing step, and `rejected` (#28, terminal) for a file that never arrived or did not match its registration. Pasted text starts at `uploaded`.
 
 For the MVP, Edge Functions plus provider webhooks and a status table are sufficient. Add Inngest or Trigger.dev if retries, multi-step orchestration, or long-running extraction become painful.
 
@@ -530,8 +545,21 @@ The E2E suite must include at least two browser sessions: one member and one fac
 
 ### Privacy operations
 
-- Private storage buckets; short-lived signed URLs.
-- Define media/transcript retention (see open questions).
+- Private storage buckets; short-lived signed URLs. The only bucket is `meeting-media` (#28): private, 200 MiB per object, the 11 canonical types of §16 question 9, written only through signed uploads for registered paths and read only by the current facilitator.
+- The local project-wide Storage limit is `[storage] file_size_limit = "200MiB"` in `supabase/config.toml`. A hosted project must allow at least 200 MiB (not possible on the Free plan's 50 MB); below that, Storage refuses bigger files with 413 and the page says the file is too large. Hosted settings are #43.
+- Orphaned objects (§4.3, #28): a `rejected` row's object, an upload that landed after its row was abandoned, and objects left by an operator deleting a cycle or project. Clients cannot delete objects. This read-only query lists them:
+
+  ```sql
+  select o.name, o.created_at, u.status, u.error_code
+    from storage.objects o
+    left join public.meeting_uploads u on u.storage_path = o.name
+   where o.bucket_id = 'meeting-media'
+     and (u.id is null or u.status = 'rejected')
+   order by o.created_at;
+  ```
+
+  Deleting them is #44's runbook (through the Storage API, which also removes the stored file); in-product removal is #116.
+- Media and transcript retention: see §16 question 8.
 - Document the operator-level anonymity caveat.
 
 ---
@@ -595,8 +623,17 @@ At MVP scale, the dominant costs are engineering time, not infrastructure:
 5. **Cluster editing rights.** The plan said "the team" can move/merge/split. First closed for any-member editing: every current member could create, rename, and delete clusters (#17), move cards (#18), and merge and split clusters (#19), with nothing extra for the facilitator or the owner. Reopened by the project owner, and answered by #19b: only the project's current facilitator may create, rename, delete, move, merge, or split. The owner gets nothing unless they are the facilitator. Members see the board read-only. Closed again.
 6. **Post-reveal card editing.** Cards are editable before the retrospective. Should they become read-only after reveal? (Recommended: yes.)
 7. ~~**Notes visibility.**~~ Answered by #25: the whole team, attributed. Every member sees every note with its author's name; there are no anonymous or facilitator-only notes.
-8. **Media retention.** Delete uploaded audio/video after transcription, or retain for re-processing? For how long?
-9. **Upload limits.** Maximum file size and accepted formats.
+8. **Media retention.** Delete uploaded audio/video after transcription, or retain for re-processing? For how long? The operator procedure, orphaned objects included, is #44; automated retention jobs are out of scope (§17).
+9. ~~**Upload limits.**~~ Answered by #28. The extension decides; the MIME type is derived from it:
+
+   | Kind | Extensions → canonical MIME | Max size |
+   |---|---|---|
+   | `audio` | `mp3` → `audio/mpeg`, `m4a` → `audio/mp4`, `wav` → `audio/wav`, `ogg` → `audio/ogg`, `webm` → `audio/webm` | 200 MiB (209,715,200 bytes) |
+   | `video` | `mp4` → `video/mp4`, `mov` → `video/quicktime`, `webm` → `video/webm` | 200 MiB (209,715,200 bytes) |
+   | `transcript_file` | `txt` → `text/plain`, `vtt` → `text/vtt`, `srt` → `application/x-subrip` | 10 MiB (10,485,760 bytes) |
+   | `transcript_text` | no file; 1–200,000 characters with a non-whitespace character | — |
+
+   At most 20 active uploads and 50 rows per cycle.
 10. **Transcription languages.** Which languages must the provider support at launch?
 11. **Summary versioning.** Does an edited/published summary need revision history, or is a single published snapshot enough?
 

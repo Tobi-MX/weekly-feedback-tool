@@ -744,7 +744,7 @@ select is(
 ) from unnest(array['private.guard_cluster_discussion_status()'::regprocedure, 'private.guard_note_update()'::regprocedure, 'private.record_notes_change()'::regprocedure]) f;
 select is((select proconfig from pg_proc where oid = f), array['search_path=""']::text[], f::text || ' fixes search_path to empty')
   from unnest(array['private.guard_cluster_discussion_status()'::regprocedure, 'private.guard_note_update()'::regprocedure, 'private.record_notes_change()'::regprocedure]) f;
-select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'private' and has_function_privilege('authenticated', p.oid, 'EXECUTE')), 2, 'authenticated can still execute exactly two private functions');
+select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'private' and has_function_privilege('authenticated', p.oid, 'EXECUTE')), 4, 'authenticated can still execute exactly four private functions (#28 adds two Storage policy helpers)');
 
 -- Earlier RPCs are untouched.
 select is(

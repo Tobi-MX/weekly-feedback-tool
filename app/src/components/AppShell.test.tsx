@@ -12,6 +12,8 @@ const FEEDBACK_CYCLE_ID = '30000000-0000-4000-8000-000000000001'
 const FEEDBACK_PATH = `/cycles/${FEEDBACK_CYCLE_ID}/feedback`
 // The board is a real screen too; its h1 is the cycle's title.
 const BOARD_PATH = `/cycles/${FEEDBACK_CYCLE_ID}/board`
+// The meeting record page (#28) is real too; its h1 is "Meeting record".
+const UPLOAD_PATH = `/cycles/${FEEDBACK_CYCLE_ID}/upload`
 
 async function renderSignedIn(
   path: string,
@@ -26,7 +28,7 @@ async function renderSignedIn(
       created_at: '2026-10-30T12:00:00.000Z',
     })
   }
-  if (path === FEEDBACK_PATH || path === BOARD_PATH) {
+  if (path === FEEDBACK_PATH || path === BOARD_PATH || path === UPLOAD_PATH) {
     cyclesMock.fetchCycle.mockResolvedValue({
       id: FEEDBACK_CYCLE_ID,
       projectId: '10000000-0000-4000-8000-000000000001',
@@ -139,7 +141,7 @@ describe('AppShell', () => {
     ['/projects/project-1', 'Project One', 1],
     [FEEDBACK_PATH, 'Feedback cycle', 0],
     [BOARD_PATH, 'Feedback cycle', 0],
-    ['/cycles/abc/upload', 'Meeting upload', 0],
+    [UPLOAD_PATH, 'Meeting record', 0],
     ['/cycles/abc/summary', 'Retrospective summary', 0],
   ])(
     'marks the expected primary link current on %s',

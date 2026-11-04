@@ -21,7 +21,6 @@ function renderSignedIn(path: string, navigationLog?: string[]) {
 
 describe('placeholder routes', () => {
   it.each<[string, string]>([
-    ['/cycles/cycle-secret-id/upload', 'Meeting upload'],
     ['/cycles/cycle-secret-id/summary', 'Retrospective summary'],
   ])('renders the %s placeholder inside the shell', async (path, heading) => {
     renderSignedIn(path)
@@ -62,6 +61,21 @@ describe('placeholder routes', () => {
       screen.queryByRole('heading', { name: 'Feedback', level: 1 }),
     ).not.toBeInTheDocument()
     expect(locationText()).toBe('/cycles/cycle-secret-id/feedback')
+  })
+
+  it('renders /cycles/:id/upload with the real upload page, not a placeholder (#28)', async () => {
+    renderSignedIn('/cycles/cycle-secret-id/upload')
+
+    expect(
+      await screen.findByText('Cycle not found or you do not have access.'),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText('This screen is not built yet.'),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('heading', { name: 'Meeting upload' }),
+    ).not.toBeInTheDocument()
+    expect(locationText()).toBe('/cycles/cycle-secret-id/upload')
   })
 
   it('renders /cycles/:id/board with the real board, not a placeholder', async () => {

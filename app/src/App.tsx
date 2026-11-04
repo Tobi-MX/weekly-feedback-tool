@@ -18,8 +18,9 @@ import ProjectMembersPage from './projects/ProjectMembersPage'
 import ProjectPage from './projects/ProjectPage'
 import ProjectsPage from './projects/ProjectsPage'
 import NotFoundPage from './routes/NotFoundPage'
-import { SummaryPage, UploadPage } from './routes/Placeholders'
+import { SummaryPage } from './routes/Placeholders'
 import ProtectedRoute from './routes/ProtectedRoute'
+import UploadPage from './uploads/UploadPage'
 
 /**
  * Routes are only mounted once auth has settled. This is what keeps the

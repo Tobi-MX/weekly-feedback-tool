@@ -14,6 +14,7 @@ import { resetMembersMock } from './test/membersMock'
 import { resetProfileMock } from './test/profileMock'
 import { resetProjectActionsMock } from './test/projectActionsMock'
 import { resetProjectsMock } from './test/projectsMock'
+import { resetUploadsMock } from './test/uploadsMock'
 import { resetVotesMock } from './test/votesMock'
 
 // Every test file gets the shared auth-module mock. Tests configure results
@@ -134,6 +135,21 @@ vi.mock('./projects/projectActionsApi', async (importOriginal) => {
   return { ...actual, fetchProjectActions: mock.fetchProjectActions }
 })
 
+// The meeting upload RPCs and the Storage upload (#28) use the same pattern,
+// so no test reaches create_meeting_upload, complete_meeting_upload,
+// get_cycle_uploads, or Storage. The constants stay real.
+vi.mock('./uploads/uploadsApi', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./uploads/uploadsApi')>()
+  const { uploadsMock: mock } = await import('./test/uploadsMock')
+  return {
+    ...actual,
+    createMeetingUpload: mock.createMeetingUpload,
+    completeMeetingUpload: mock.completeMeetingUpload,
+    fetchCycleUploads: mock.fetchCycleUploads,
+    uploadMeetingFile: mock.uploadMeetingFile,
+  }
+})
+
 // jsdom lacks a few browser APIs that Radix and sonner feature-detect.
 if (typeof globalThis.ResizeObserver === 'undefined') {
   globalThis.ResizeObserver = class ResizeObserver {
@@ -179,6 +195,7 @@ beforeEach(() => {
   resetDiscussionMock()
   resetActionsMock()
   resetProjectActionsMock()
+  resetUploadsMock()
   // Sonner keeps its toast queue outside React, so dismiss it between tests.
   toast.dismiss()
   // The QueryClient is a singleton in the app; reset it between tests so one

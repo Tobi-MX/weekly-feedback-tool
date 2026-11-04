@@ -333,7 +333,8 @@ select is(
   'execute on get_cycle_status is granted only to authenticated'
 );
 select is(
-  (select array_agg(p.proname::text order by p.proname) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'private' and (has_function_privilege('anon', p.oid, 'EXECUTE') or (has_function_privilege('authenticated', p.oid, 'EXECUTE') and p.proname not in ('is_project_member', 'is_project_facilitator')))),
+  (select array_agg(p.proname::text order by p.proname) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'private' and (has_function_privilege('anon', p.oid, 'EXECUTE') or (has_function_privilege('authenticated', p.oid, 'EXECUTE') and p.proname not in ('is_project_member', 'is_project_facilitator', 'can_upload_meeting_object', 'can_read_meeting_object')))),
+  -- #28 adds the two meeting-media Storage policy helpers.
   null,
   'no new private helper is executable by anon or authenticated'
 );

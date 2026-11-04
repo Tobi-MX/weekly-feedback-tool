@@ -567,7 +567,7 @@ select is(
   false,
   'close_voting_if_complete mentions no cycle_events, cards, card_authors, or profiles, takes no lock, and raises nothing'
 );
-select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'private' and has_function_privilege('authenticated', p.oid, 'EXECUTE')), 2, 'authenticated can still execute exactly two private functions');
+select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'private' and has_function_privilege('authenticated', p.oid, 'EXECUTE')), 4, 'authenticated can still execute exactly four private functions (#28 adds two Storage policy helpers)');
 
 -- cast_vote is #22's function plus the final helper call.
 select is(

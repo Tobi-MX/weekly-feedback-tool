@@ -94,9 +94,11 @@ function LoadError({ onRetry }: { onRetry: () => void }) {
 function BoardHeader({
   cycle,
   status,
+  isFacilitator,
 }: {
   cycle: CycleDetail
   status: CycleStatus
+  isFacilitator: boolean
 }) {
   return (
     <div className="min-w-0 space-y-2">
@@ -118,6 +120,12 @@ function BoardHeader({
         <Link to={`/cycles/${cycle.id}/feedback`} className={linkClass}>
           {status === 'collecting' ? 'Add feedback' : 'View my feedback'}
         </Link>
+        {/* The meeting record (#28): the facilitator only, from discuss on. */}
+        {isFacilitator && (status === 'discuss' || status === 'closed') ? (
+          <Link to={`/cycles/${cycle.id}/upload`} className={linkClass}>
+            Upload meeting record
+          </Link>
+        ) : null}
       </div>
     </div>
   )
@@ -585,7 +593,11 @@ function BoardScreen({ cycleId }: { cycleId: string }) {
   } else {
     body = (
       <>
-        <BoardHeader cycle={cycle} status={board.status} />
+        <BoardHeader
+          cycle={cycle}
+          status={board.status}
+          isFacilitator={isFacilitator}
+        />
         {cycleQuery.isError || boardQuery.isError ? (
           <LoadError onRetry={retry} />
         ) : null}
