@@ -336,7 +336,7 @@ export const VTT_FIXTURES: readonly TranscriptFixture[] = [
     name: '&lrm; and &rlm; are decoded',
     format: 'vtt',
     input: 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\na&lrm;b&rlm;c\n',
-    expected: cues('vtt', seg(1000, 2000, 'a‎b‏c')),
+    expected: cues('vtt', seg(1000, 2000, 'a\u200eb\u200fc')),
   },
   {
     name: 'an unknown tag keeps its <',
@@ -612,19 +612,19 @@ export const PLAIN_FIXTURES: readonly TranscriptFixture[] = [
   {
     name: 'one leading U+FEFF is removed from pasted text',
     format: 'auto',
-    input: '﻿Hello',
+    input: '\ufeffHello',
     expected: { format: 'plain', text: 'Hello', segments: [] },
   },
   {
     name: 'whitespace only is empty',
     format: 'auto',
-    input: ' \n\t\r\n  ',
+    input: ' \n\t\r\n\u00a0 ',
     expected: error('empty'),
   },
   {
     name: 'a lone U+FEFF is empty',
     format: 'auto',
-    input: '﻿',
+    input: '\ufeff',
     expected: error('empty'),
   },
   {
@@ -642,8 +642,8 @@ export const PLAIN_FIXTURES: readonly TranscriptFixture[] = [
   {
     name: 'emoji and combining marks are kept as they are (no normalization)',
     format: 'auto',
-    input: 'é 😀',
-    expected: { format: 'plain', text: 'é 😀', segments: [] },
+    input: 'e\u0301 😀',
+    expected: { format: 'plain', text: 'e\u0301 😀', segments: [] },
   },
 ]
 

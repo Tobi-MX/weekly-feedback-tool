@@ -14,7 +14,11 @@ vi.resetModules()
 const {
   completeMeetingUpload,
   createMeetingUpload,
+  downloadTranscriptFile,
   fetchCycleUploads,
+  fetchPastedTranscriptText,
+  rejectTranscriptUpload,
+  storeTranscript,
   uploadMeetingFile,
 } = await vi.importActual<typeof import('./uploadsApi')>('./uploadsApi')
 const { UploadApiError, uploadErrorCodeOf } =
@@ -82,6 +86,8 @@ function fileItem(overrides: Record<string, unknown> = {}) {
     created_at: T,
     uploaded_at: T,
     updated_at: T,
+    transcript_length: null,
+    transcript_segment_count: null,
     ...overrides,
   }
 }
@@ -121,6 +127,7 @@ afterEach(() => {
     expect(spy).not.toHaveBeenCalled()
   }
   state.client = null
+  vi.unstubAllGlobals()
 })
 
 describe('createMeetingUpload', () => {
@@ -373,6 +380,8 @@ describe('fetchCycleUploads', () => {
       createdAt: T,
       uploadedAt: T,
       updatedAt: T,
+      transcriptLength: null,
+      transcriptSegmentCount: null,
     })
     expect(result.uploads[0].textLength).toBe(12)
   })
@@ -431,9 +440,109 @@ describe('fetchCycleUploads', () => {
       { cycle_id: CYCLE_ID, uploads: [fileItem({ uploaded_at: null })] },
     ],
     ['another cycle', { cycle_id: TEXT_ID, uploads: [] }],
+    [
+      'a missing transcript_length (#29)',
+      {
+        cycle_id: CYCLE_ID,
+        uploads: [withoutKey(fileItem(), 'transcript_length')],
+      },
+    ],
+    [
+      'a missing transcript_segment_count (#29)',
+      {
+        cycle_id: CYCLE_ID,
+        uploads: [withoutKey(fileItem(), 'transcript_segment_count')],
+      },
+    ],
+    [
+      'a transcript length without a segment count',
+      {
+        cycle_id: CYCLE_ID,
+        uploads: [textItem({ status: 'extracting', transcript_length: 5 })],
+      },
+    ],
+    [
+      'transcript keys on an audio upload',
+      {
+        cycle_id: CYCLE_ID,
+        uploads: [
+          fileItem({ transcript_length: 5, transcript_segment_count: 0 }),
+        ],
+      },
+    ],
+    [
+      'a transcript length of 0',
+      {
+        cycle_id: CYCLE_ID,
+        uploads: [
+          textItem({ transcript_length: 0, transcript_segment_count: 0 }),
+        ],
+      },
+    ],
+    [
+      'pending_upload with uploaded_at',
+      {
+        cycle_id: CYCLE_ID,
+        uploads: [fileItem({ status: 'pending_upload' })],
+      },
+    ],
+    [
+      'extracting without uploaded_at',
+      {
+        cycle_id: CYCLE_ID,
+        uploads: [textItem({ status: 'extracting', uploaded_at: null })],
+      },
+    ],
   ])('refuses %s as unknown', async (_label, data) => {
     createRpcMock({ data, error: null })
     expect(await codeOf(fetchCycleUploads(CYCLE_ID))).toBe('unknown')
+  })
+
+  it('maps the transcript keys and accepts a rejected row with or without uploaded_at (#29)', async () => {
+    const transcriptFile = fileItem({
+      upload_id: TEXT_ID,
+      kind: 'transcript_file',
+      original_filename: 'standup.vtt',
+      mime_type: 'text/vtt',
+      status: 'extracting',
+      transcript_length: 1234,
+      transcript_segment_count: 12,
+    })
+    createRpcMock({
+      data: {
+        cycle_id: CYCLE_ID,
+        uploads: [
+          transcriptFile,
+          fileItem({
+            kind: 'transcript_file',
+            original_filename: 'bad.txt',
+            mime_type: 'text/plain',
+            status: 'rejected',
+            error_code: 'transcript_bad_encoding',
+          }),
+          fileItem({
+            upload_id: 'b1000000-0000-4000-8000-000000000003',
+            status: 'rejected',
+            error_code: 'upload_file_mismatch',
+            uploaded_at: null,
+          }),
+        ],
+      },
+      error: null,
+    })
+    const result = await fetchCycleUploads(CYCLE_ID)
+    expect(result.uploads[0]).toMatchObject({
+      transcriptLength: 1234,
+      transcriptSegmentCount: 12,
+    })
+    expect(result.uploads[1]).toMatchObject({
+      status: 'rejected',
+      errorCode: 'transcript_bad_encoding',
+      uploadedAt: T,
+      transcriptLength: null,
+      transcriptSegmentCount: null,
+    })
+    expect(result.uploads[2].uploadedAt).toBeNull()
   })
 })
 
@@ -535,5 +644,301 @@ describe('uploadMeetingFile', () => {
     }).catch((reason: unknown) => reason)
     expect(uploadErrorCodeOf(error)).toBe('upload_failed')
     expect(String(error)).not.toContain(TOKEN)
+  })
+})
+
+describe('storeTranscript (#29)', () => {
+  const segments = [{ start_ms: 0, end_ms: 1000, text: 'Alice: Hi' }]
+
+  it('sends exactly p_upload_id, p_text and p_segments and parses the row', async () => {
+    const rpc = createRpcMock({
+      data: [
+        {
+          upload_id: UPLOAD_ID,
+          status: 'extracting',
+          text_length: 9,
+          segment_count: 1,
+        },
+      ],
+      error: null,
+    })
+    await expect(
+      storeTranscript(UPLOAD_ID, 'Alice: Hi', segments),
+    ).resolves.toEqual({
+      uploadId: UPLOAD_ID,
+      status: 'extracting',
+      textLength: 9,
+      segmentCount: 1,
+    })
+    expect(rpc).toHaveBeenCalledTimes(1)
+    expect(rpc).toHaveBeenCalledWith('store_transcript', {
+      p_upload_id: UPLOAD_ID,
+      p_text: 'Alice: Hi',
+      p_segments: segments,
+    })
+  })
+
+  const row = {
+    upload_id: UPLOAD_ID,
+    status: 'extracting',
+    text_length: 9,
+    segment_count: 1,
+  }
+  it.each<[string, unknown]>([
+    ['a missing key', [withoutKey(row, 'segment_count')]],
+    ['an extra key', [{ ...row, text: 'Alice: Hi' }]],
+    ['an unknown status', [{ ...row, status: 'stored' }]],
+    ['another id', [{ ...row, upload_id: TEXT_ID }]],
+    ['a negative count', [{ ...row, segment_count: -1 }]],
+    ['no row', []],
+  ])('refuses %s as unknown', async (_label, data) => {
+    createRpcMock({ data, error: null })
+    expect(
+      await codeOf(storeTranscript(UPLOAD_ID, 'Alice: Hi', segments)),
+    ).toBe('unknown')
+  })
+
+  it.each([
+    'upload_not_transcript',
+    'upload_not_ready',
+    'transcript_already_stored',
+    'invalid_transcript',
+    'cycle_not_discussing',
+    'upload_not_found',
+    'not_project_facilitator',
+    'not_project_member',
+  ] as const)('maps %s', async (code) => {
+    createRpcMock({ data: null, error: { message: code } })
+    expect(await codeOf(storeTranscript(UPLOAD_ID, 'a', []))).toBe(code)
+  })
+
+  it('refuses an unknown code as unknown', async () => {
+    createRpcMock({ data: null, error: { message: 'transcript_immutable' } })
+    expect(await codeOf(storeTranscript(UPLOAD_ID, 'a', []))).toBe('unknown')
+  })
+})
+
+describe('rejectTranscriptUpload (#29)', () => {
+  it('sends exactly p_upload_id and p_reason and parses the row', async () => {
+    const rpc = createRpcMock({
+      data: [
+        {
+          upload_id: UPLOAD_ID,
+          status: 'rejected',
+          error_code: 'transcript_malformed',
+        },
+      ],
+      error: null,
+    })
+    await expect(
+      rejectTranscriptUpload(UPLOAD_ID, 'transcript_malformed'),
+    ).resolves.toEqual({
+      uploadId: UPLOAD_ID,
+      status: 'rejected',
+      errorCode: 'transcript_malformed',
+    })
+    expect(rpc).toHaveBeenCalledTimes(1)
+    expect(rpc).toHaveBeenCalledWith('reject_transcript_upload', {
+      p_upload_id: UPLOAD_ID,
+      p_reason: 'transcript_malformed',
+    })
+  })
+
+  it.each<[string, unknown]>([
+    [
+      'an extra key',
+      [
+        {
+          upload_id: UPLOAD_ID,
+          status: 'rejected',
+          error_code: 'transcript_empty',
+          line: 4,
+        },
+      ],
+    ],
+    ['a missing key', [{ upload_id: UPLOAD_ID, status: 'rejected' }]],
+    [
+      'an unknown status',
+      [{ upload_id: UPLOAD_ID, status: 'refused', error_code: null }],
+    ],
+  ])('refuses %s as unknown', async (_label, data) => {
+    createRpcMock({ data, error: null })
+    expect(
+      await codeOf(rejectTranscriptUpload(UPLOAD_ID, 'transcript_empty')),
+    ).toBe('unknown')
+  })
+
+  it('maps invalid_reject_reason', async () => {
+    createRpcMock({ data: null, error: { message: 'invalid_reject_reason' } })
+    expect(
+      await codeOf(rejectTranscriptUpload(UPLOAD_ID, 'transcript_empty')),
+    ).toBe('invalid_reject_reason')
+  })
+})
+
+describe('fetchPastedTranscriptText (#29)', () => {
+  it('sends only p_upload_id and returns the text unchanged', async () => {
+    const rpc = createRpcMock({
+      data: [{ upload_id: TEXT_ID, pasted_text: '\uFEFFone\r\ntwo' }],
+      error: null,
+    })
+    await expect(fetchPastedTranscriptText(TEXT_ID)).resolves.toBe(
+      '\uFEFFone\r\ntwo',
+    )
+    expect(rpc).toHaveBeenCalledTimes(1)
+    expect(rpc).toHaveBeenCalledWith('get_pasted_transcript_text', {
+      p_upload_id: TEXT_ID,
+    })
+  })
+
+  it.each<[string, unknown]>([
+    ['an extra key', [{ upload_id: TEXT_ID, pasted_text: 'a', kind: 'x' }]],
+    ['a missing key', [{ upload_id: TEXT_ID }]],
+    ['empty text', [{ upload_id: TEXT_ID, pasted_text: '' }]],
+    ['another id', [{ upload_id: UPLOAD_ID, pasted_text: 'a' }]],
+  ])('refuses %s as unknown', async (_label, data) => {
+    createRpcMock({ data, error: null })
+    expect(await codeOf(fetchPastedTranscriptText(TEXT_ID))).toBe('unknown')
+  })
+
+  it('maps upload_not_ready', async () => {
+    createRpcMock({ data: null, error: { message: 'upload_not_ready' } })
+    expect(await codeOf(fetchPastedTranscriptText(TEXT_ID))).toBe(
+      'upload_not_ready',
+    )
+  })
+})
+
+describe('downloadTranscriptFile (#29)', () => {
+  const SIGNED_URL = `http://127.0.0.1:54321/storage/v1/object/sign/meeting-media/${PATH}?token=signed-secret`
+
+  function signedStorage(result: StorageResult) {
+    const createSignedUrl = vi.fn(() => Promise.resolve(result))
+    const from = vi.fn(() => ({ createSignedUrl }))
+    state.client = { storage: { from } }
+    return { from, createSignedUrl }
+  }
+
+  function response(
+    body: Uint8Array,
+    init: { ok?: boolean; length?: string | null } = {},
+  ) {
+    return {
+      ok: init.ok ?? true,
+      status: init.ok === false ? 500 : 200,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === 'content-length'
+            ? (init.length ?? null)
+            : null,
+      },
+      arrayBuffer: () => Promise.resolve(body.slice().buffer),
+    }
+  }
+
+  it('signs the path for 60 seconds, fetches that URL and returns the bytes only', async () => {
+    const storage = signedStorage({
+      data: { signedUrl: SIGNED_URL },
+      error: null,
+    })
+    const bytes = new TextEncoder().encode('WEBVTT\n')
+    const fetchMock = vi.fn(() => Promise.resolve(response(bytes)))
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await downloadTranscriptFile(PATH)
+    expect(storage.from).toHaveBeenCalledWith('meeting-media')
+    expect(storage.createSignedUrl).toHaveBeenCalledTimes(1)
+    expect(storage.createSignedUrl).toHaveBeenCalledWith(PATH, 60)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledWith(SIGNED_URL)
+    expect(result).toBeInstanceOf(Uint8Array)
+    expect([...result]).toEqual([...bytes])
+    expect(new TextDecoder().decode(result)).not.toContain('signed-secret')
+  })
+
+  it.each<[string, () => void]>([
+    [
+      'a Storage error',
+      () => {
+        signedStorage({
+          data: null,
+          error: { message: 'Object not found', statusCode: '404' },
+        })
+        vi.stubGlobal('fetch', vi.fn())
+      },
+    ],
+    [
+      'a non-2xx response',
+      () => {
+        signedStorage({ data: { signedUrl: SIGNED_URL }, error: null })
+        vi.stubGlobal(
+          'fetch',
+          vi.fn(() =>
+            Promise.resolve(response(new Uint8Array(1), { ok: false })),
+          ),
+        )
+      },
+    ],
+    [
+      'a network error',
+      () => {
+        signedStorage({ data: { signedUrl: SIGNED_URL }, error: null })
+        vi.stubGlobal(
+          'fetch',
+          vi.fn(() => Promise.reject(new TypeError(`offline ${SIGNED_URL}`))),
+        )
+      },
+    ],
+    [
+      'a declared body over 10 MiB',
+      () => {
+        signedStorage({ data: { signedUrl: SIGNED_URL }, error: null })
+        vi.stubGlobal(
+          'fetch',
+          vi.fn(() =>
+            Promise.resolve(
+              response(new Uint8Array(1), { length: '10485761' }),
+            ),
+          ),
+        )
+      },
+    ],
+    [
+      'a body over 10 MiB',
+      () => {
+        signedStorage({ data: { signedUrl: SIGNED_URL }, error: null })
+        vi.stubGlobal(
+          'fetch',
+          vi.fn(() => Promise.resolve(response(new Uint8Array(10_485_761)))),
+        )
+      },
+    ],
+  ])('gives transcript_download_failed for %s', async (_label, arrange) => {
+    arrange()
+    const error = await downloadTranscriptFile(PATH).catch(
+      (reason: unknown) => reason,
+    )
+    expect(uploadErrorCodeOf(error)).toBe('transcript_download_failed')
+    expect(String(error)).not.toContain('signed-secret')
+    expect(JSON.stringify(error)).not.toContain('signed-secret')
+  })
+
+  it('accepts a body of exactly 10 MiB', async () => {
+    signedStorage({ data: { signedUrl: SIGNED_URL }, error: null })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          response(new Uint8Array(10_485_760), { length: '10485760' }),
+        ),
+      ),
+    )
+    expect((await downloadTranscriptFile(PATH)).byteLength).toBe(10_485_760)
+  })
+
+  it('gives transcript_download_failed without a client', async () => {
+    state.client = null
+    expect(await codeOf(downloadTranscriptFile(PATH))).toBe(
+      'transcript_download_failed',
+    )
   })
 })

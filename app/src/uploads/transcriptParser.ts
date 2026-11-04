@@ -283,7 +283,7 @@ export function resolveTranscriptFormat(
 }
 
 function stripBom(text: string): string {
-  return text.startsWith('﻿') ? text.slice(1) : text
+  return text.startsWith('\ufeff') ? text.slice(1) : text
 }
 
 // ---------------------------------------------------------------------------
@@ -434,9 +434,9 @@ const VTT_ENTITIES: ReadonlyArray<readonly [string, string]> = [
   ['&gt;', '>'],
   ['&quot;', '"'],
   ['&#39;', "'"],
-  ['&nbsp;', ' '],
-  ['&lrm;', '‎'],
-  ['&rlm;', '‏'],
+  ['&nbsp;', '\u00a0'],
+  ['&lrm;', '\u200e'],
+  ['&rlm;', '\u200f'],
 ]
 
 /** The tag name: everything up to a dot, space or tab. */

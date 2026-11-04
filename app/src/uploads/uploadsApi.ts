@@ -1,13 +1,18 @@
 import { z } from 'zod'
 import { supabase } from '@/auth/supabaseClient'
+import type { TranscriptSegment } from './transcriptParser'
 import { UploadApiError, toUploadErrorCode } from './uploadErrors'
 import {
+  TRANSCRIPT_FILE_MAX_BYTES,
+  TRANSCRIPT_REJECT_REASONS,
   UPLOAD_KINDS,
   UPLOAD_MAX_BYTES,
   UPLOAD_MIME_TYPES,
   UPLOAD_STATUSES,
   isFileKind,
+  isTranscriptKind,
   type FileUploadKind,
+  type TranscriptRejectReason,
   type UploadKind,
   type UploadStatus,
 } from './uploadRules'
@@ -47,6 +52,10 @@ export interface MeetingUpload {
   readonly createdAt: string
   readonly uploadedAt: string | null
   readonly updatedAt: string
+  /** Characters of the stored transcript (#29); null without one. */
+  readonly transcriptLength: number | null
+  /** Timed segments of the stored transcript (#29); null without one. */
+  readonly transcriptSegmentCount: number | null
 }
 
 export interface CycleUploads {
@@ -124,6 +133,8 @@ const uploadSchema = z
     created_at: timestamp,
     uploaded_at: timestamp.nullable(),
     updated_at: timestamp,
+    transcript_length: z.number().int().positive().nullable(),
+    transcript_segment_count: z.number().int().nonnegative().nullable(),
   })
   .strict()
   .refine(fileFieldsConsistent)
@@ -138,10 +149,19 @@ const uploadSchema = z
         row.text_length !== null &&
         row.status !== 'pending_upload',
   )
+  // #29: pending_upload has no uploaded_at; a row rejected after upload
+  // keeps it; every other status has it.
+  .refine((row) =>
+    row.status === 'pending_upload'
+      ? row.uploaded_at === null
+      : row.status === 'rejected' || row.uploaded_at !== null,
+  )
+  // Both transcript keys or neither, and only for transcript kinds.
   .refine(
     (row) =>
-      (row.status === 'pending_upload' || row.status === 'rejected') ===
-      (row.uploaded_at === null),
+      (row.transcript_length === null) ===
+        (row.transcript_segment_count === null) &&
+      (row.transcript_length === null || isTranscriptKind(row.kind)),
   )
 
 const uploadsSchema = z
@@ -162,7 +182,7 @@ interface DbResult {
  */
 async function callRpc(
   fn: string,
-  args: Record<string, string | number | null>,
+  args: Record<string, string | number | null | readonly TranscriptSegment[]>,
 ): Promise<unknown> {
   if (!supabase) {
     throw new UploadApiError('unknown')
@@ -256,6 +276,8 @@ export async function fetchCycleUploads(
       createdAt: row.created_at,
       uploadedAt: row.uploaded_at,
       updatedAt: row.updated_at,
+      transcriptLength: row.transcript_length,
+      transcriptSegmentCount: row.transcript_segment_count,
     })),
   }
 }
@@ -342,4 +364,137 @@ export async function uploadMeetingFile({
     }
     throw new UploadApiError('upload_failed')
   }
+}
+
+// ---------------------------------------------------------------------------
+// Transcripts (#29).
+// ---------------------------------------------------------------------------
+
+/** What `store_transcript` returned. */
+export interface StoredTranscript {
+  readonly uploadId: string
+  readonly status: UploadStatus
+  readonly textLength: number
+  readonly segmentCount: number
+}
+
+const storedSchema = z
+  .object({
+    upload_id: z.string(),
+    status: z.enum(UPLOAD_STATUSES),
+    text_length: z.number().int().positive(),
+    segment_count: z.number().int().nonnegative(),
+  })
+  .strict()
+
+/**
+ * Stores a parsed transcript and moves the upload to `extracting`. The
+ * database re-validates every limit and shape.
+ */
+export async function storeTranscript(
+  uploadId: string,
+  text: string,
+  segments: readonly TranscriptSegment[],
+): Promise<StoredTranscript> {
+  const data = await callRpc('store_transcript', {
+    p_upload_id: uploadId,
+    p_text: text,
+    p_segments: segments,
+  })
+  const row = oneRow(storedSchema, data)
+  if (row.upload_id !== uploadId) {
+    throw new UploadApiError('unknown')
+  }
+  return {
+    uploadId: row.upload_id,
+    status: row.status,
+    textLength: row.text_length,
+    segmentCount: row.segment_count,
+  }
+}
+
+/** Marks a transcript upload the parser refused as `rejected`. */
+export async function rejectTranscriptUpload(
+  uploadId: string,
+  reason: TranscriptRejectReason,
+): Promise<CompletedUpload> {
+  const data = await callRpc('reject_transcript_upload', {
+    p_upload_id: uploadId,
+    p_reason: reason,
+  })
+  const row = oneRow(completedSchema, data)
+  if (row.upload_id !== uploadId) {
+    throw new UploadApiError('unknown')
+  }
+  return {
+    uploadId: row.upload_id,
+    status: row.status,
+    errorCode: row.error_code,
+  }
+}
+
+const pastedSchema = z
+  .object({
+    upload_id: z.string(),
+    pasted_text: z.string().min(1),
+  })
+  .strict()
+
+/** The registered pasted text of an `uploaded` row, to read it again. */
+export async function fetchPastedTranscriptText(
+  uploadId: string,
+): Promise<string> {
+  const data = await callRpc('get_pasted_transcript_text', {
+    p_upload_id: uploadId,
+  })
+  const row = oneRow(pastedSchema, data)
+  if (row.upload_id !== uploadId) {
+    throw new UploadApiError('unknown')
+  }
+  return row.pasted_text
+}
+
+/** Seconds a transcript download URL stays valid. */
+export const TRANSCRIPT_DOWNLOAD_URL_SECONDS = 60
+
+/**
+ * Downloads a transcript file through a 60-second signed URL, which Storage
+ * issues only under the facilitator-only SELECT policy. The URL never
+ * leaves this function: it is not returned, cached, logged, or put in the
+ * page URL or browser storage. Any failure, and a body over 10 MiB, is
+ * `transcript_download_failed`.
+ */
+export async function downloadTranscriptFile(
+  storagePath: string,
+): Promise<Uint8Array> {
+  if (!supabase) {
+    throw new UploadApiError('transcript_download_failed')
+  }
+  try {
+    const signed = await supabase.storage
+      .from(MEETING_MEDIA_BUCKET)
+      .createSignedUrl(storagePath, TRANSCRIPT_DOWNLOAD_URL_SECONDS)
+    if (signed.error) {
+      throw new UploadApiError('transcript_download_failed')
+    }
+    const response = await fetch(signed.data.signedUrl)
+    const declared = Number(response.headers.get('content-length') ?? '0')
+    if (!response.ok || declared > TRANSCRIPT_FILE_MAX_BYTES) {
+      throw new UploadApiError('transcript_download_failed')
+    }
+    const body = new Uint8Array(await response.arrayBuffer())
+    if (body.byteLength > TRANSCRIPT_FILE_MAX_BYTES) {
+      throw new UploadApiError('transcript_download_failed')
+    }
+    return body
+  } catch {
+    throw new UploadApiError('transcript_download_failed')
+  }
+}
+
+/** Only the reasons `reject_transcript_upload` accepts. */
+export function isTranscriptRejectReason(
+  code: string | null,
+): code is TranscriptRejectReason {
+  return TRANSCRIPT_REJECT_REASONS.some((reason) => reason === code)
 }

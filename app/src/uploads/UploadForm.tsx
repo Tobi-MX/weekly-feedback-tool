@@ -91,8 +91,11 @@ interface UploadFormProps {
   readonly text: string
   /** The inline message for the current kind's field, or null. */
   readonly fieldError: string | null
-  /** The submit in flight (this tab sends one at a time), or null. */
-  readonly pending: 'file' | 'text' | null
+  /**
+   * The sequence in flight (this tab runs one at a time), or null. `read` is
+   * a Read again or Read transcript: the button keeps its label.
+   */
+  readonly pending: 'file' | 'text' | 'read' | null
   readonly fileInputRefs: Readonly<
     Record<FileUploadKind, RefObject<HTMLInputElement | null>>
   >

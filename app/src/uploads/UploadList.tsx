@@ -4,9 +4,11 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { formatProjectDate } from '@/projects/projectDate'
 import type { RefObject } from 'react'
+import { TRANSCRIPT_REJECTED_REASONS } from './uploadErrors'
 import type { MeetingUpload } from './uploadsApi'
 import {
   formatFileSize,
+  isTranscriptKind,
   type UploadKind,
   type UploadStatus,
 } from './uploadRules'
@@ -16,6 +18,7 @@ export const UPLOADS_LOAD_ERROR_MESSAGE = 'Could not load the uploads.'
 export const UPLOADS_EMPTY_MESSAGE = 'No uploads yet.'
 export const PASTED_TEXT_NAME = 'Pasted transcript text'
 export const UPLOAD_NOT_FINISHED_MESSAGE = 'Upload not finished.'
+export const TRANSCRIPT_NOT_READ_MESSAGE = 'Not read yet.'
 
 export const UPLOAD_KIND_LABELS: Record<UploadKind, string> = {
   audio: 'Audio recording',
@@ -41,6 +44,7 @@ export const REJECTED_REASONS: Readonly<Record<string, string>> = {
   upload_file_mismatch:
     'The uploaded file did not match the file that was registered. Add it again as a new upload.',
   upload_abandoned: 'The file never arrived. Add it again as a new upload.',
+  ...TRANSCRIPT_REJECTED_REASONS,
 }
 
 /** The upload's display name: its file name, or the pasted-text label. */
@@ -48,12 +52,24 @@ export function uploadName(upload: MeetingUpload): string {
   return upload.originalFilename ?? PASTED_TEXT_NAME
 }
 
+function characters(n: number): string {
+  return `${n.toLocaleString('en-US')} ${n === 1 ? 'character' : 'characters'}`
+}
+
 function sizeText(upload: MeetingUpload): string {
   if (upload.sizeBytes !== null) {
     return formatFileSize(upload.sizeBytes)
   }
-  const n = upload.textLength ?? 0
-  return `${n.toLocaleString('en-US')} ${n === 1 ? 'character' : 'characters'}`
+  return characters(upload.textLength ?? 0)
+}
+
+/** `Transcript: 1,234 characters, 12 timed segments.` (#29). */
+export function transcriptSummary(length: number, segments: number): string {
+  const timing =
+    segments === 0
+      ? 'no timestamps'
+      : `${segments.toLocaleString('en-US')} ${segments === 1 ? 'timed segment' : 'timed segments'}`
+  return `Transcript: ${characters(length)}, ${timing}.`
 }
 
 interface UploadListProps {
@@ -62,10 +78,13 @@ interface UploadListProps {
   readonly headingRef: RefObject<HTMLHeadingElement | null>
   /** The row this tab is uploading right now, if any. */
   readonly activeUploadId: string | null
-  /** A write is in flight: Check again sends nothing. */
+  /** A write is in flight: Check again and Read transcript send nothing. */
   readonly busy: boolean
+  /** The cycle allows reads (discuss or closed): Read transcript is shown. */
+  readonly canRead: boolean
   readonly onRetryLoad: () => void
   readonly onCheckAgain: (upload: MeetingUpload) => void
+  readonly onReadTranscript: (upload: MeetingUpload) => void
 }
 
 /** The cycle's uploads in server order (newest first). */
@@ -75,8 +94,10 @@ export function UploadList({
   headingRef,
   activeUploadId,
   busy,
+  canRead,
   onRetryLoad,
   onCheckAgain,
+  onReadTranscript,
 }: UploadListProps) {
   let body: React.ReactNode
   if (uploads === undefined && isError) {
@@ -112,6 +133,11 @@ export function UploadList({
           const unfinished =
             upload.status === 'pending_upload' &&
             upload.uploadId !== activeUploadId
+          const notRead =
+            isTranscriptKind(upload.kind) &&
+            upload.status === 'uploaded' &&
+            upload.transcriptLength === null &&
+            upload.uploadId !== activeUploadId
           return (
             <li
               key={upload.uploadId}
@@ -129,6 +155,15 @@ export function UploadList({
               </p>
               {reason !== undefined ? (
                 <p className="text-sm">{reason}</p>
+              ) : null}
+              {upload.transcriptLength !== null &&
+              upload.transcriptSegmentCount !== null ? (
+                <p className="text-sm">
+                  {transcriptSummary(
+                    upload.transcriptLength,
+                    upload.transcriptSegmentCount,
+                  )}
+                </p>
               ) : null}
               <p className="text-sm text-muted-foreground">
                 Added {formatProjectDate(upload.createdAt)}
@@ -148,6 +183,25 @@ export function UploadList({
                   >
                     Check again
                   </Button>
+                </div>
+              ) : null}
+              {notRead ? (
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                  <p className="text-sm">{TRANSCRIPT_NOT_READ_MESSAGE}</p>
+                  {canRead ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      aria-disabled={busy ? 'true' : undefined}
+                      className="min-h-6 aria-disabled:opacity-50"
+                      onClick={() => {
+                        onReadTranscript(upload)
+                      }}
+                    >
+                      Read transcript
+                    </Button>
+                  ) : null}
                 </div>
               ) : null}
             </li>

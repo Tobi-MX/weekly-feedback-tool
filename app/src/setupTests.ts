@@ -137,7 +137,9 @@ vi.mock('./projects/projectActionsApi', async (importOriginal) => {
 
 // The meeting upload RPCs and the Storage upload (#28) use the same pattern,
 // so no test reaches create_meeting_upload, complete_meeting_upload,
-// get_cycle_uploads, or Storage. The constants stay real.
+// get_cycle_uploads, or Storage. #29's transcript RPCs and the signed
+// download (createSignedUrl, then fetch) are mocked the same way. The
+// constants stay real.
 vi.mock('./uploads/uploadsApi', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./uploads/uploadsApi')>()
   const { uploadsMock: mock } = await import('./test/uploadsMock')
@@ -147,6 +149,10 @@ vi.mock('./uploads/uploadsApi', async (importOriginal) => {
     completeMeetingUpload: mock.completeMeetingUpload,
     fetchCycleUploads: mock.fetchCycleUploads,
     uploadMeetingFile: mock.uploadMeetingFile,
+    storeTranscript: mock.storeTranscript,
+    rejectTranscriptUpload: mock.rejectTranscriptUpload,
+    fetchPastedTranscriptText: mock.fetchPastedTranscriptText,
+    downloadTranscriptFile: mock.downloadTranscriptFile,
   }
 })
 

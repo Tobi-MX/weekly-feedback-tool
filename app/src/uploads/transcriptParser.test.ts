@@ -159,7 +159,7 @@ describe('decodeTranscriptBytes', () => {
   })
 
   it('applies no Unicode normalization and counts by code point', () => {
-    const decomposed = 'é'
+    const decomposed = 'e\u0301'
     const text = decodeTranscriptBytes(utf8(decomposed))
     expect(text).toBe(decomposed)
     const result = parsed(parseTranscript('😀'.repeat(200_000), 'auto'))
@@ -182,7 +182,7 @@ describe('format detection', () => {
   it.each<[string, string]>([
     ['WEBVTT', 'vtt'],
     ['WEBVTT - x\n\n00:01.000 --> 00:02.000\nHi', 'vtt'],
-    ['﻿WEBVTT\n', 'vtt'],
+    ['\ufeffWEBVTT\n', 'vtt'],
     ['1\n00:00:01,000 --> 00:00:02,000\nHi', 'srt'],
     ['WEBVTTX', 'plain'],
     ['42', 'plain'],
