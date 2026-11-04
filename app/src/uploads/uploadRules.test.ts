@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
+import type { TranscriptParseErrorCode } from './transcriptParser'
 import {
   ACTIVE_UPLOADS_LIMIT,
   FILE_NAME_MAX_LENGTH,
   MEDIA_MAX_BYTES,
   TOTAL_UPLOADS_LIMIT,
   TRANSCRIPT_FILE_MAX_BYTES,
+  TRANSCRIPT_MAX_MS,
+  TRANSCRIPT_MAX_SEGMENTS,
+  TRANSCRIPT_REJECT_REASONS,
   TRANSCRIPT_TEXT_MAX_LENGTH,
   UPLOAD_KINDS,
   UPLOAD_MAX_BYTES,
@@ -14,7 +18,10 @@ import {
   codePointLength,
   fileExtension,
   formatFileSize,
+  formatForUpload,
+  isTranscriptKind,
   mimeTypeFor,
+  rejectReasonFor,
   validateTranscriptText,
   validateUploadFile,
 } from './uploadRules'
@@ -173,5 +180,58 @@ describe('upload rules (#28 decisions 3, 4 and 9)', () => {
     [209_715_200, '200.0 MB'],
   ])('formatFileSize(%i) is %s', (bytes, text) => {
     expect(formatFileSize(bytes)).toBe(text)
+  })
+})
+
+describe('transcript rules (#29 decisions 2, 6 and 8)', () => {
+  it('pins the limits to the literal values pgTAP pins', () => {
+    expect(TRANSCRIPT_MAX_SEGMENTS).toBe(20000)
+    expect(TRANSCRIPT_MAX_MS).toBe(86400000)
+    expect(TRANSCRIPT_TEXT_MAX_LENGTH).toBe(200000)
+  })
+
+  it('maps the three MIME types and pasted text to a parse format', () => {
+    expect(formatForUpload('transcript_file', 'text/vtt')).toBe('vtt')
+    expect(formatForUpload('transcript_file', 'application/x-subrip')).toBe(
+      'srt',
+    )
+    expect(formatForUpload('transcript_file', 'text/plain')).toBe('auto')
+    expect(formatForUpload('transcript_text', null)).toBe('auto')
+  })
+
+  it('knows the transcript kinds', () => {
+    expect(isTranscriptKind('transcript_file')).toBe(true)
+    expect(isTranscriptKind('transcript_text')).toBe(true)
+    expect(isTranscriptKind('audio')).toBe(false)
+    expect(isTranscriptKind('video')).toBe(false)
+  })
+
+  it('maps every parser code to its reject reason', () => {
+    const table: Record<TranscriptParseErrorCode, string> = {
+      bad_encoding: 'transcript_bad_encoding',
+      not_text: 'transcript_not_text',
+      empty: 'transcript_empty',
+      missing_header: 'transcript_malformed',
+      bad_timing_line: 'transcript_malformed',
+      bad_timestamp: 'transcript_malformed',
+      end_before_start: 'transcript_malformed',
+      out_of_order: 'transcript_malformed',
+      missing_blank_line: 'transcript_malformed',
+      no_cues: 'transcript_no_cues',
+      too_long: 'transcript_too_long',
+      too_many_segments: 'transcript_too_many_segments',
+    }
+    for (const [code, reason] of Object.entries(table)) {
+      expect(rejectReasonFor(code as TranscriptParseErrorCode)).toBe(reason)
+    }
+    expect(TRANSCRIPT_REJECT_REASONS).toEqual([
+      'transcript_bad_encoding',
+      'transcript_not_text',
+      'transcript_empty',
+      'transcript_malformed',
+      'transcript_no_cues',
+      'transcript_too_long',
+      'transcript_too_many_segments',
+    ])
   })
 })
