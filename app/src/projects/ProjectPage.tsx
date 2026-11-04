@@ -1,6 +1,7 @@
 import { Link, useParams } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { ProjectCycles } from '@/cycles/ProjectCycles'
+import { ProjectActions } from './ProjectActions'
 import { formatProjectDate } from './projectDate'
 import { useProjectQuery } from './useProjects'
 
@@ -65,7 +66,10 @@ export function ProjectPage() {
               Members
             </Link>
           </div>
-          <ProjectCycles projectId={project.id} />
+          <ProjectCycles
+            projectId={project.id}
+            between={<ProjectActions projectId={project.id} />}
+          />
         </>
       ) : null}
     </section>
